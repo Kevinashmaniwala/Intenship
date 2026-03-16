@@ -68,11 +68,9 @@ Key attributes include:
 
 ---
 
-## 📷 Dashboard Preview
 
-<img src="dashboard.png" width="900">
 
----
+
 
 ## 📊 Key Insights
 
