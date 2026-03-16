@@ -104,5 +104,6 @@ This project was created to practice and demonstrate:
 ## 👨‍💻 Author
 
 **Kevin Ashmaniwala**
+LinkedIn: https://linkedin.com/in/kevin-ashmaniwala
 
 If you like this project, feel free to ⭐ the repository.
