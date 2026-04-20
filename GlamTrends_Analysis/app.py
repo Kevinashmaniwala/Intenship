@@ -336,7 +336,7 @@ with t_studio:
 
         st.divider()
 
-        st.markdown("### 🤖 NLP Intelligence Lab")
+     st.markdown("### 🤖 NLP Intelligence Lab")
         nl_left, nl_right = st.columns([1, 1])
         
         with nl_left:
@@ -344,9 +344,9 @@ with t_studio:
             if text_cols:
                 sel_col = st.selectbox("Select Text Column", text_cols, key="dash_sent_col")
                 if st.button("Run Intelligence Scan"):
-                    # CLEAN DATA: Filter out empty strings and whitespace to prevent ValueError
+                    # CLEAN DATA: Filter out empty strings and "nan" strings
                     raw_sample = df_studio[sel_col].astype(str).head(50).tolist()
-                    sample_data = [t for t in raw_sample if t.strip()]
+                    sample_data = [t for t in raw_sample if t.strip() and t.strip().lower() != "nan"]
                     
                     if sample_data:
                         results = sentiment_engine(sample_data)
@@ -358,39 +358,27 @@ with t_studio:
                         st.plotly_chart(px.pie(sent_df, names="Label", hole=0.4, height=250, color_discrete_sequence=['#1eb197', '#ef553b']), use_container_width=True)
                         st.dataframe(sent_df, height=200)
                     else:
-                        st.warning("⚠️ No valid text found in the selected column for analysis.")
+                        st.warning("⚠️ No valid text found in the selected column.")
             else:
                 st.info("No text columns found.")
 
-       with nl_right:
+        with nl_right:
             st.write("**☁️ Keyword Trends (Word Cloud)**")
             if text_cols:
-                # 1. Ensure we are working with a clean string series without NaNs
+                # CLEAN DATA: Ensure no NaNs or empty strings are joined
                 clean_series = df_studio[text_cols[0]].fillna("").astype(str)
-                
-                # 2. Filter for non-empty, non-whitespace text
                 filtered_series = clean_series[clean_series.str.strip() != ""]
-                
-                # 3. Join the top 500 records
                 text_data = " ".join(filtered_series.head(500))
                 
-                # 4. Final check: Only generate if the final string has content
                 if text_data.strip():
-                    wc = WordCloud(
-                        width=600, 
-                        height=350, 
-                        background_color="white", 
-                        colormap="viridis"
-                    ).generate(text_data)
-                    
+                    wc = WordCloud(width=600, height=350, background_color="white", colormap="viridis").generate(text_data)
                     fig, ax = plt.subplots()
                     ax.imshow(wc)
                     ax.axis("off")
                     st.pyplot(fig)
                 else:
-                    st.info("ℹ️ No valid text found in this column to generate a word cloud.")
-
-# --- TAB: ML MODELER STUDIO ---
+                    st.info("ℹ️ Not enough text data to generate a word cloud.")# --- TAB: ML MODELER STUDIO ---
+                    
 with t_modeler:
     st.markdown('<div class="exploration-header">⚙️ ML Modeler - Advanced Training</div>', unsafe_allow_html=True)
     df_ml = st.session_state.working_df
