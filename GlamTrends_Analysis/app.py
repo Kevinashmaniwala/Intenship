@@ -281,7 +281,6 @@ with t_bulk:
         m3.metric("Avg Trust Score", f"{res_view['Trust_Score'].mean():.1f}%")
         m4.metric("AI Confidence", f"{res_view['AI_Confidence'].mean():.1f}%")
         
-        # Search functionality within scan results
         search_scan = st.text_input("🔍 Search within results...", key="scan_search_box")
         if search_scan:
             res_view = res_view[res_view.apply(lambda row: search_scan.lower() in row.astype(str).str.lower().values, axis=1)]
@@ -336,7 +335,7 @@ with t_studio:
 
         st.divider()
 
-     st.markdown("### 🤖 NLP Intelligence Lab")
+        st.markdown("### 🤖 NLP Intelligence Lab")
         nl_left, nl_right = st.columns([1, 1])
         
         with nl_left:
@@ -344,7 +343,6 @@ with t_studio:
             if text_cols:
                 sel_col = st.selectbox("Select Text Column", text_cols, key="dash_sent_col")
                 if st.button("Run Intelligence Scan"):
-                    # CLEAN DATA: Filter out empty strings and "nan" strings
                     raw_sample = df_studio[sel_col].astype(str).head(50).tolist()
                     sample_data = [t for t in raw_sample if t.strip() and t.strip().lower() != "nan"]
                     
@@ -365,7 +363,6 @@ with t_studio:
         with nl_right:
             st.write("**☁️ Keyword Trends (Word Cloud)**")
             if text_cols:
-                # CLEAN DATA: Ensure no NaNs or empty strings are joined
                 clean_series = df_studio[text_cols[0]].fillna("").astype(str)
                 filtered_series = clean_series[clean_series.str.strip() != ""]
                 text_data = " ".join(filtered_series.head(500))
@@ -377,8 +374,11 @@ with t_studio:
                     ax.axis("off")
                     st.pyplot(fig)
                 else:
-                    st.info("ℹ️ Not enough text data to generate a word cloud.")# --- TAB: ML MODELER STUDIO ---
-                    
+                    st.info("ℹ️ Not enough text data to generate a word cloud.")
+    else:
+        st.info("👋 Select a source and connect your dataset to unlock the Enterprise Dashboard.")
+
+# --- TAB: ML MODELER STUDIO ---
 with t_modeler:
     st.markdown('<div class="exploration-header">⚙️ ML Modeler - Advanced Training</div>', unsafe_allow_html=True)
     df_ml = st.session_state.working_df
