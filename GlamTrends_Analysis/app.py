@@ -21,7 +21,7 @@ import optuna
 
 # ================= 1. SYSTEM SETTINGS =================
 st.set_page_config(
-    page_title="Glame",
+    page_title="GlamTrends",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -343,7 +343,7 @@ with t_studio:
             if text_cols:
                 sel_col = st.selectbox("Select Text Column", text_cols, key="dash_sent_col")
                 if st.button("Run Intelligence Scan"):
-                    # TYPE-SAFE: Handle non-string values during filtering
+                    # TYPE-SAFE: Explicitly convert to string and filter
                     raw_sample = df_studio[sel_col].head(50).tolist()
                     sample_data = [str(t) for t in raw_sample if str(t).strip() and str(t).strip().lower() != "nan"]
                     
@@ -364,7 +364,7 @@ with t_studio:
         with nl_right:
             st.write("**☁️ Keyword Trends (Word Cloud)**")
             if text_cols:
-                # TYPE-SAFE: Explicitly convert to string and fill nulls before stripping
+                # TYPE-SAFE: Use fillna and astype(str) before stripping
                 clean_series = df_studio[text_cols[0]].fillna("").astype(str)
                 filtered_series = clean_series[clean_series.str.strip() != ""]
                 text_data = " ".join(filtered_series.head(500))
@@ -394,12 +394,14 @@ with t_modeler:
             
             use_pca = st.checkbox("Apply PCA Reduction")
             st.info("🎯 Target Variable: Rating")
-            target = "Rating" if "Rating" in df_ml.columns else df_ml.select_dtypes(include=[np.number]).columns.tolist()[-1]
-            algo = st.selectbox("Algorithm", ["XGBoost", "RandomForest"], key="ml_algo") 
             
+            # Auto-detect target and features
+            target = "Rating" if "Rating" in df_ml.columns else df_ml.select_dtypes(include=[np.number]).columns.tolist()[-1]
             numeric_cols_ml = df_ml.select_dtypes(include=[np.number]).columns.tolist()
             available_feats = [c for c in numeric_cols_ml if c != target]
-            feats = st.multiselect("Select Features (X)", available_feats, default=available_feats[:2], key="ml_feats")
+            
+            algo = st.selectbox("Algorithm", ["XGBoost", "RandomForest"], key="ml_algo") 
+            feats = st.multiselect("Select Features (X)", available_feats, default=available_feats[:2] if len(available_feats)>1 else available_feats, key="ml_feats")
             
             st.markdown("---")
             p_lr = st.slider("Learning Rate", 0.01, 0.3, 0.1)
@@ -409,61 +411,80 @@ with t_modeler:
             
             use_grid = st.checkbox("Use GridSearchCV") 
             use_bayesian = st.checkbox("Use Bayesian Opt (Optuna)") 
-            train = st.button("🚀 Train & Optimize Model", key="ml_train_btn")
+            train_clicked = st.button("🚀 Train & Optimize Model", key="ml_train_btn")
         
         with r:
-            if train and feats:
-                X, y = df_ml[feats], LabelEncoder().fit_transform(df_ml[target])
-                
-                if use_pca:
-                    pca = PCA(n_components=min(len(feats), 2))
-                    X = pca.fit_transform(X)
-                
-                X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2)
-                
-                try:
-                    if use_bayesian:
-                        def objective(trial):
-                            p_nest = trial.suggest_int('n_estimators', 50, 150)
-                            p_maxd = trial.suggest_int('max_depth', 3, 8)
-                            if algo == "XGBoost":
-                                p_lrat = trial.suggest_float('learning_rate', 0.01, 0.3)
-                                m = XGBClassifier(n_estimators=p_nest, max_depth=p_maxd, learning_rate=p_lrat, eval_metric='mlogloss', reg_alpha=reg_alpha, reg_lambda=reg_lambda)
-                            else:
-                                m = RandomForestClassifier(n_estimators=p_nest, max_depth=p_maxd)
-                            return cross_val_score(m, X_tr, y_tr, cv=3).mean()
-                        
-                        study = optuna.create_study(direction='maximize')
-                        study.optimize(objective, n_trials=5)
-                        
-                        if algo == "XGBoost":
-                            model = XGBClassifier(**study.best_params, reg_alpha=reg_alpha, reg_lambda=reg_lambda).fit(X_tr, y_tr)
-                        else:
-                            rf_best_params = {'n_estimators': study.best_params['n_estimators'], 'max_depth': study.best_params['max_depth']}
-                            model = RandomForestClassifier(**rf_best_params).fit(X_tr, y_tr)
+            if train_clicked:
+                if not feats:
+                    st.error("Please select at least one feature.")
+                else:
+                    with st.spinner("🤖 AI is training your model..."):
+                        try:
+                            # 1. Prepare Data
+                            X = df_ml[feats].copy()
+                            y = LabelEncoder().fit_transform(df_ml[target])
                             
-                    elif use_grid:
-                        grid = GridSearchCV(XGBClassifier(eval_metric='mlogloss'), {'n_estimators': [50, 100], 'max_depth': [3, 5]}, cv=3).fit(X_tr, y_tr)
-                        model = grid.best_estimator_
-                    else:
-                        if algo == "XGBoost":
-                            model = XGBClassifier(learning_rate=p_lr, max_depth=p_depth, n_estimators=100, reg_alpha=reg_alpha, reg_lambda=reg_lambda, eval_metric='mlogloss')
-                            model.fit(X_tr, y_tr, eval_set=[(X_te, y_te)], early_stopping_rounds=10, verbose=False)
-                        else:
-                            model = RandomForestClassifier(n_estimators=100, max_depth=p_depth).fit(X_tr, y_tr)
-                    
-                    joblib.dump(model, 'final_model.pkl')
-                    st.success(f"Accuracy: {round(model.score(X_te, y_te)*100, 2)}%")
-                    
-                    st.markdown("#### 🔍 Model Interpretability (Feature Impact)")
-                    feat_names = feats if not use_pca else ['PC1', 'PC2']
-                    feat_imp = pd.DataFrame({'Feature': feat_names, 'Importance': model.feature_importances_}).sort_values(by='Importance', ascending=False)
-                    st.plotly_chart(px.bar(feat_imp, x='Importance', y='Feature', orientation='h', color='Importance', template="plotly_white"), use_container_width=True)
-                    
-                except Exception as e:
-                    st.error(f"Error: {e}")
+                            if use_pca:
+                                pca = PCA(n_components=min(len(feats), 2))
+                                X = pca.fit_transform(X)
+                            
+                            X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=42)
+                            
+                            # 2. Training Logic
+                            if use_bayesian:
+                                def objective(trial):
+                                    p_nest = trial.suggest_int('n_estimators', 50, 100)
+                                    p_maxd = trial.suggest_int('max_depth', 3, 7)
+                                    if algo == "XGBoost":
+                                        m = XGBClassifier(n_estimators=p_nest, max_depth=p_maxd, eval_metric='mlogloss')
+                                    else:
+                                        m = RandomForestClassifier(n_estimators=p_nest, max_depth=p_maxd)
+                                    return cross_val_score(m, X_tr, y_tr, cv=2).mean()
+                                
+                                study = optuna.create_study(direction='maximize')
+                                study.optimize(objective, n_trials=3)
+                                
+                                if algo == "XGBoost":
+                                    model = XGBClassifier(**study.best_params, eval_metric='mlogloss').fit(X_tr, y_tr)
+                                else:
+                                    model = RandomForestClassifier(**study.best_params).fit(X_tr, y_tr)
+                                    
+                            elif use_grid:
+                                grid = GridSearchCV(XGBClassifier(eval_metric='mlogloss'), {'n_estimators': [50, 80], 'max_depth': [3, 5]}, cv=2).fit(X_tr, y_tr)
+                                model = grid.best_estimator_
+                            else:
+                                if algo == "XGBoost":
+                                    model = XGBClassifier(learning_rate=p_lr, max_depth=p_depth, n_estimators=100, reg_alpha=reg_alpha, reg_lambda=reg_lambda, eval_metric='mlogloss')
+                                    model.fit(X_tr, y_tr)
+                                else:
+                                    model = RandomForestClassifier(n_estimators=100, max_depth=p_depth).fit(X_tr, y_tr)
+                            
+                            # 3. Output Results
+                            acc = round(model.score(X_te, y_te)*100, 2)
+                            st.success(f"### ✅ Model Training Complete!")
+                            st.metric("Test Accuracy Score", f"{acc}%")
+                            
+                            # Save Model
+                            joblib.dump(model, 'final_model.pkl')
+                            st.info("💾 Model saved as 'final_model.pkl'")
+                            
+                            # Feature Importance Plot
+                            st.markdown("#### 🔍 Feature Impact Analysis")
+                            feat_names = feats if not use_pca else ['PC1', 'PC2']
+                            feat_imp = pd.DataFrame({'Feature': feat_names, 'Importance': model.feature_importances_}).sort_values(by='Importance', ascending=True)
+                            
+                            fig_imp = px.bar(feat_imp, x='Importance', y='Feature', orientation='h', 
+                                            title="Feature Influence",
+                                            color='Importance', color_continuous_scale='Viridis')
+                            st.plotly_chart(fig_imp, use_container_width=True)
+
+                        except Exception as e:
+                            st.error(f"❌ Training Failed: {str(e)}")
+            else:
+                st.info("Configure parameters and click 'Train' to see results.")
     else:
-        st.warning("⚠️ No data available. Connect a source in 'Enterprise AI Studio' first.")
+        st.warning("⚠️ No data available. Please upload a dataset in 'Enterprise AI Studio' first.")
 
 st.divider()
 st.markdown("<div style='text-align: center; color: grey;'>created by Kevin Ashmaniwala</div>", unsafe_allow_html=True)
+            
