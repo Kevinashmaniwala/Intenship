@@ -362,21 +362,33 @@ with t_studio:
             else:
                 st.info("No text columns found.")
 
-        with nl_right:
+       with nl_right:
             st.write("**☁️ Keyword Trends (Word Cloud)**")
             if text_cols:
-                # CLEAN DATA: Join only non-empty strings
-                valid_text_series = df_studio[text_cols[0]].astype(str)
-                text_data = " ".join(valid_text_series[valid_text_series.str.strip() != ""].head(500))
+                # 1. Ensure we are working with a clean string series without NaNs
+                clean_series = df_studio[text_cols[0]].fillna("").astype(str)
                 
+                # 2. Filter for non-empty, non-whitespace text
+                filtered_series = clean_series[clean_series.str.strip() != ""]
+                
+                # 3. Join the top 500 records
+                text_data = " ".join(filtered_series.head(500))
+                
+                # 4. Final check: Only generate if the final string has content
                 if text_data.strip():
-                    wc = WordCloud(width=600, height=350, background_color="white", colormap="viridis").generate(text_data)
-                    fig, ax = plt.subplots(); ax.imshow(wc); ax.axis("off")
+                    wc = WordCloud(
+                        width=600, 
+                        height=350, 
+                        background_color="white", 
+                        colormap="viridis"
+                    ).generate(text_data)
+                    
+                    fig, ax = plt.subplots()
+                    ax.imshow(wc)
+                    ax.axis("off")
                     st.pyplot(fig)
                 else:
-                    st.info("ℹ️ Not enough text data to generate a word cloud.")
-    else:
-        st.info("👋 Select a source and connect your dataset to unlock the Enterprise Dashboard.")
+                    st.info("ℹ️ No valid text found in this column to generate a word cloud.")
 
 # --- TAB: ML MODELER STUDIO ---
 with t_modeler:
