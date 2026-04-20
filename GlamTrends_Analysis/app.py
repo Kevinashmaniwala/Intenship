@@ -344,46 +344,40 @@ with t_studio:
             if text_cols:
                 sel_col = st.selectbox("Select Text Column", text_cols, key="dash_sent_col")
                 if st.button("Run Intelligence Scan"):
-                    sample_data = df_studio[sel_col].astype(str).head(20).tolist()
-                    results = sentiment_engine(sample_data)
-                    sent_df = pd.DataFrame({
-                        "Text Snippet": [t[:50]+"..." for t in sample_data],
-                        "Label": [r['label'] for r in results],
-                        "Score": [round(r['score']*100, 1) for r in results]
-                    })
-                    st.plotly_chart(px.pie(sent_df, names="Label", hole=0.4, height=250, color_discrete_sequence=['#1eb197', '#ef553b']), use_container_width=True)
-                    st.dataframe(sent_df, height=200)
+                    # CLEAN DATA: Filter out empty strings and whitespace to prevent ValueError
+                    raw_sample = df_studio[sel_col].astype(str).head(50).tolist()
+                    sample_data = [t for t in raw_sample if t.strip()]
+                    
+                    if sample_data:
+                        results = sentiment_engine(sample_data)
+                        sent_df = pd.DataFrame({
+                            "Text Snippet": [t[:50]+"..." for t in sample_data],
+                            "Label": [r['label'] for r in results],
+                            "Score": [round(r['score']*100, 1) for r in results]
+                        })
+                        st.plotly_chart(px.pie(sent_df, names="Label", hole=0.4, height=250, color_discrete_sequence=['#1eb197', '#ef553b']), use_container_width=True)
+                        st.dataframe(sent_df, height=200)
+                    else:
+                        st.warning("⚠️ No valid text found in the selected column for analysis.")
             else:
                 st.info("No text columns found.")
-
-    #     with nl_right:
-    #         st.write("**☁️ Keyword Trends (Word Cloud)**")
-    #         if text_cols:
-    #             text_data = " ".join(df_studio[text_cols[0]].astype(str).head(500))
-    #             if text_data.strip():
-    #                 wc = WordCloud(width=600, height=350, background_color="white", colormap="viridis").generate(text_data)
-    #                 fig, ax = plt.subplots(); ax.imshow(wc); ax.axis("off")
-    #                 st.pyplot(fig)
-    # else:
-    #     st.info("👋 Select a source and connect your dataset to unlock the Enterprise Dashboard.")
 
         with nl_right:
             st.write("**☁️ Keyword Trends (Word Cloud)**")
             if text_cols:
-                # Filter out empty rows and "nan" strings to prevent the TypeError
-                raw_text_series = df_studio[text_cols[0]].astype(str)
-                filtered_text = raw_text_series[raw_text_series.str.strip().str.lower() != "nan"]
-                text_data = " ".join(filtered_text.head(500))
+                # CLEAN DATA: Join only non-empty strings
+                valid_text_series = df_studio[text_cols[0]].astype(str)
+                text_data = " ".join(valid_text_series[valid_text_series.str.strip() != ""].head(500))
                 
-                # Only attempt to generate if text_data actually contains words
-                if len(text_data.strip()) > 0:
+                if text_data.strip():
                     wc = WordCloud(width=600, height=350, background_color="white", colormap="viridis").generate(text_data)
-                    fig, ax = plt.subplots()
-                    ax.imshow(wc)
-                    ax.axis("off")
+                    fig, ax = plt.subplots(); ax.imshow(wc); ax.axis("off")
                     st.pyplot(fig)
                 else:
-                    st.info("ℹ️ No descriptive text available in this column to generate a cloud.")
+                    st.info("ℹ️ Not enough text data to generate a word cloud.")
+    else:
+        st.info("👋 Select a source and connect your dataset to unlock the Enterprise Dashboard.")
+
 # --- TAB: ML MODELER STUDIO ---
 with t_modeler:
     st.markdown('<div class="exploration-header">⚙️ ML Modeler - Advanced Training</div>', unsafe_allow_html=True)
