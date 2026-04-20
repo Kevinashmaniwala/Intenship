@@ -21,7 +21,7 @@ import optuna
 
 # ================= 1. SYSTEM SETTINGS =================
 st.set_page_config(
-    page_title="Glame ",
+    page_title="Glame",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -343,13 +343,14 @@ with t_studio:
             if text_cols:
                 sel_col = st.selectbox("Select Text Column", text_cols, key="dash_sent_col")
                 if st.button("Run Intelligence Scan"):
-                    raw_sample = df_studio[sel_col].astype(str).head(50).tolist()
-                    sample_data = [t for t in raw_sample if t.strip() and t.strip().lower() != "nan"]
+                    # TYPE-SAFE: Handle non-string values during filtering
+                    raw_sample = df_studio[sel_col].head(50).tolist()
+                    sample_data = [str(t) for t in raw_sample if str(t).strip() and str(t).strip().lower() != "nan"]
                     
                     if sample_data:
                         results = sentiment_engine(sample_data)
                         sent_df = pd.DataFrame({
-                            "Text Snippet": [t[:50]+"..." for t in sample_data],
+                            "Text Snippet": [str(t)[:50]+"..." for t in sample_data],
                             "Label": [r['label'] for r in results],
                             "Score": [round(r['score']*100, 1) for r in results]
                         })
@@ -363,6 +364,7 @@ with t_studio:
         with nl_right:
             st.write("**☁️ Keyword Trends (Word Cloud)**")
             if text_cols:
+                # TYPE-SAFE: Explicitly convert to string and fill nulls before stripping
                 clean_series = df_studio[text_cols[0]].fillna("").astype(str)
                 filtered_series = clean_series[clean_series.str.strip() != ""]
                 text_data = " ".join(filtered_series.head(500))
