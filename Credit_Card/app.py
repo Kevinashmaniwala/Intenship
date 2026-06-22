@@ -411,7 +411,7 @@ def load_data(path: str) -> pd.DataFrame:
             'Loan_Approved': 'Approved',
         }])
 
-    data = pd.read_csv(path)
+    data = pd.read_parquet(path)
     if 'Loan_Approved' in data.columns:
         data['Loan_Approved'] = data['Loan_Approved'].astype(str).str.strip().str.lower()
         data['Loan_Approved'] = data['Loan_Approved'].replace({
