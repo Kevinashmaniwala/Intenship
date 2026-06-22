@@ -214,9 +214,9 @@ html, body, [class*="css"], .stApp {
 # ── Constants & Paths ─────────────────────────────────────────────────────────
 base_path = os.path.dirname(os.path.abspath(__file__))
 
-CSV_PATH   = os.path.join(base_path, "loan_clean_data.parquet")
+DATA_PATH   = os.path.join(base_path, "loan_clean_data.parquet")
 MODEL_PKL  = os.path.join(base_path, "loan_model.pkl")
-# SCALER_PKL = os.path.join(base_path, "loan_scaler.pkl")
+SCALER_PKL = os.path.join(base_path, "loan_scaler.pkl")
 
 GREEN, RED = "#38a169", "#e53e3e"
 
@@ -426,7 +426,7 @@ def load_data(path: str) -> pd.DataFrame:
     data[int_cols]   = data[int_cols].astype('int32')
     return data
 
-df_all = load_data(CSV_PATH)
+df_all = load_data(DATA_PATH)
 
 model, scaler = load_assets()
 
@@ -849,3 +849,4 @@ if st.session_state.scan_done:
         )
     except Exception:
         st.dataframe(display_df, use_container_width=True, height=550)
+        
