@@ -143,7 +143,7 @@ def calculate_emi(principal: float, annual_rate_pct: float, term_months: int) ->
 
 
 def get_hard_reject_reasons(credit_score, dti, disposable_after_emi,
-                             employment, collateral, loan_amt):
+                            employment, collateral, loan_amt):
     reasons = []
     if credit_score < 500:
         reasons.append(f"Credit score {credit_score} is below minimum threshold of 500")
@@ -623,39 +623,3 @@ with tab4:
             st.info("Results will appear here after running the pipeline.")
             st.button("🔒 Run pipeline first", disabled=True, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
-
-# ── Audit Logs ────────────────────────────────────────────────────────────────
-if st.session_state.scan_done and st.session_state.result_df is not None:
-    st.markdown("---")
-    st.markdown("### 🎯 Audit Pipeline Results")
-
-    view_df  = st.session_state.result_df
-    approved = len(view_df[view_df['AI_Decision'] == "Approved"])
-    rejected = len(view_df[view_df['AI_Decision'] == "Rejected"])
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Processed",  f"{len(view_df):,}")
-    m2.metric("✅ Approved",       f"{approved:,}")
-    m3.metric("❌ Rejected",       f"{rejected:,}",  delta_color="inverse")
-    m4.metric("Avg Trust Score",  f"{view_df['Trust_Score'].mean():.1f}%")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # Approval pie
-    pie_col, tbl_col = st.columns([1, 2])
-    with pie_col:
-        fig_pie = px.pie(
-            values=[approved, rejected], names=["Approved", "Rejected"],
-            hole=0.5, color_discrete_sequence=[GREEN, RED],
-        )
-        fig_pie.update_layout(margin=dict(t=10, b=10), height=250)
-        st.plotly_chart(fig_pie, use_container_width=True)
-
-    with tbl_col:
-        try:
-            st.dataframe(
-                view_df.style.background_gradient(subset=['Trust_Score'], cmap='RdYlGn'),
-                use_container_width=True, height=300,
-            )
-        except Exception:
-            st.dataframe(view_df, use_container_width=True, height=300)
