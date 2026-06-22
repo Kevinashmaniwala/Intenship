@@ -596,7 +596,7 @@ with tab2:
         m4.metric("Disposable Income after Dependents & EMI", f"₹{disposable_after_emi:,.0f}")
         st.markdown('</div>', unsafe_allow_html=True)
 
-        submitted = st.form_submit_button("⚡ Run AI Loan Validation", type="primary", width='stretch')
+        submitted = st.form_submit_button("⚡ Run AI Loan Validation", type="primary")
 
     # ── Everything below only runs when the form is submitted ─────────────────
     if submitted:
@@ -769,7 +769,7 @@ with tab4:
         if tpl_type == "CSV":
             st.download_button("📥 Structure Blueprint (CSV)",  tpl_data.to_csv(index=False),                       "loan_template.csv")
         elif tpl_type == "JSON":
-            st.download_button("📥 Structure Blueprint (JSON)", tpl_data.to_json(orient="records", indent=4),       "loan_template.json", width='stretch')
+            st.download_button("📥 Structure Blueprint (JSON)", tpl_data.to_json(orient="records", indent=4), "loan_template.json")
         else:
             sql_txt = f"INSERT INTO pipeline_loan VALUES {tuple(tpl_data.iloc[0].values)};"
             st.download_button("📥 Structure Blueprint (SQL)",  sql_txt,                                             "loan_template.sql")
@@ -805,7 +805,7 @@ with tab4:
                 except Exception:
                     st.error("Vault Authentication Failed.")
 
-        if raw_input_data is not None and st.button("🚀 INITIATE AI PIPELINE RUN", type="primary", width='stretch'):
+        if raw_input_data is not None and st.button("🚀 INITIATE AI PIPELINE RUN", type="primary"):
             original_display = raw_input_data.copy()
             predict_hidden   = pd.get_dummies(original_display)
             predict_hidden   = predict_hidden.loc[:, ~predict_hidden.columns.duplicated()].copy()
@@ -854,12 +854,12 @@ with tab4:
             if exp_fmt == "CSV":
                 st.download_button("💾 Export CSV Logs",    st.session_state.result_df.to_csv(index=False),                         "loan_report.csv")
             elif exp_fmt == "JSON":
-                st.download_button("💾 Export JSON Schema", st.session_state.result_df.to_json(orient="records", indent=4),         "loan_report.json", width='stretch')
+                st.download_button("💾 Export JSON Schema", st.session_state.result_df.to_json(orient="records", indent=4), "loan_report.json")
             else:
                 sql_out = f"INSERT INTO loan_predictions VALUES {str([tuple(x) for x in st.session_state.result_df.head(1000).values])};"
                 st.download_button("💾 Export SQL (Top 1k rows)", sql_out,                                                          "loan_report.sql")
         else:
-            st.button("🔒 Interface Enclosed", disabled=True, width='stretch')
+            st.button("🔒 Interface Enclosed", disabled=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ── Audit Logs (shown below all tabs when scan is done) ───────────────────────
@@ -882,3 +882,4 @@ if st.session_state.scan_done:
         )
     except Exception:
         st.dataframe(display_df, height=550)
+        
