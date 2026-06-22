@@ -397,21 +397,8 @@ def run_prediction(
     confidence_scores = _model_ref.predict_proba(scaled_inp)[0]
     return int(prediction), float(confidence_scores[0] * 100), float(confidence_scores[1] * 100)
 
-@st.cache_data(show_spinner="Loading dataset…")
-def load_data(path: str) -> pd.DataFrame:
-    """Read and normalise the loan CSV once; cached across reruns."""
-    if not os.path.exists(path):
-        return pd.DataFrame([{
-            'Applicant_ID': 1001, 'Applicant_Income': 65000, 'Coapplicant_Income': 20000,
-            'Employment_Status': 'Employed', 'Age': 35, 'Marital_Status': 'Married',
-            'Dependents': 2, 'Credit_Score': 720, 'Existing_Loans': 1, 'DTI_Ratio': 0.35,
-            'Savings': 150000, 'Collateral_Value': 500000, 'Loan_Amount': 300000,
-            'Loan_Term': 180, 'Loan_Purpose': 'Home', 'Property_Area': 'Urban',
-            'Education_Level': 'Graduate', 'Gender': 'Male', 'Employer_Category': 'Corporate',
-            'Loan_Approved': 'Approved',
-        }])
-
-    data = pd.read_csv(path)
+def _normalise(data):
+    """Normalise Loan_Approved labels and downcast dtypes."""
     if 'Loan_Approved' in data.columns:
         data['Loan_Approved'] = data['Loan_Approved'].astype(str).str.strip().str.lower()
         data['Loan_Approved'] = data['Loan_Approved'].replace({
@@ -426,7 +413,54 @@ def load_data(path: str) -> pd.DataFrame:
     data[int_cols]   = data[int_cols].astype('int32')
     return data
 
-df_all = load_data(CSV_PATH)
+def _dummy_df():
+    """Single-row fallback when no data source is available."""
+    return pd.DataFrame([{
+        'Applicant_ID': 1001, 'Applicant_Income': 65000, 'Coapplicant_Income': 20000,
+        'Employment_Status': 'Employed', 'Age': 35, 'Marital_Status': 'Married',
+        'Dependents': 2, 'Credit_Score': 720, 'Existing_Loans': 1, 'DTI_Ratio': 0.35,
+        'Savings': 150000, 'Collateral_Value': 500000, 'Loan_Amount': 300000,
+        'Loan_Term': 180, 'Loan_Purpose': 'Home', 'Property_Area': 'Urban',
+        'Education_Level': 'Graduate', 'Gender': 'Male', 'Employer_Category': 'Corporate',
+        'Loan_Approved': 'Approved',
+    }])
+
+@st.cache_data(show_spinner="Loading dataset...")
+def load_data(csv_path, gdrive_id):
+    """
+    Smart loader - works in three environments:
+    1. LOCAL DEV        : reads CSV directly from disk
+    2. STREAMLIT CLOUD  : downloads from Google Drive via gdown (needs GDRIVE_FILE_ID secret)
+    3. FALLBACK         : returns 1-row dummy with a warning
+    """
+    # Priority 1: local file exists (developer machine / local run)
+    if os.path.exists(csv_path):
+        return _normalise(pd.read_csv(csv_path))
+
+    # Priority 2: Google Drive secret configured (Streamlit Cloud)
+    if gdrive_id:
+        try:
+            import gdown
+            tmp_path = "/tmp/loan_clean_data.csv"
+            if not os.path.exists(tmp_path):   # skip re-download if already cached
+                url = f"https://drive.google.com/uc?id={gdrive_id}"
+                gdown.download(url, tmp_path, quiet=True)
+            return _normalise(pd.read_csv(tmp_path))
+        except Exception as e:
+            st.sidebar.error(f"Google Drive download failed: {e}")
+            return _dummy_df()
+
+    # Priority 3: nothing available
+    st.sidebar.warning(
+        "Dataset not found.\n\n"
+        "LOCAL: Place loan_clean_data.csv next to app.py\n\n"
+        "STREAMLIT CLOUD: Add GDRIVE_FILE_ID in Settings -> Secrets"
+    )
+    return _dummy_df()
+
+# Read secret (empty string if running locally without secrets file)
+_gdrive_id = st.secrets.get("GDRIVE_FILE_ID", "") if hasattr(st, "secrets") else ""
+df_all = load_data(CSV_PATH, _gdrive_id)
 
 model, scaler = load_assets()
 
