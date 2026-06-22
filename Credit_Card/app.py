@@ -15,11 +15,15 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Session state init — must happen right after set_page_config ──────────────
-if "scan_done" not in st.session_state:
-    st.session_state.scan_done = False
-if "result_df" not in st.session_state:
-    st.session_state.result_df = None
+# ── Session state — initialise ALL keys here before anything else ─────────────
+for _k, _v in {
+    "scan_done":      False,
+    "result_df":      None,
+    "uploaded_df":    None,   # ← stores uploaded file across reruns
+    "upload_error":   None,
+}.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -84,8 +88,7 @@ html, body, [class*="css"], .stApp { font-family: 'Plus Jakarta Sans', sans-seri
     letter-spacing: 0.06em; padding-bottom: 0.6rem; margin-bottom: 1.2rem; }
 .main-app-header {
     background: linear-gradient(135deg, #2b6cb0 0%, #3182ce 100%);
-    color: white !important; padding: 1.5rem 2rem; border-radius: 14px;
-    margin-bottom: 2rem; }
+    color: white !important; padding: 1.5rem 2rem; border-radius: 14px; margin-bottom: 2rem; }
 .main-app-header h1 {
     color: white !important; margin: 0 !important;
     font-size: 28px !important; font-weight: 700 !important; }
@@ -101,7 +104,7 @@ html, body, [class*="css"], .stApp { font-family: 'Plus Jakarta Sans', sans-seri
         const rgb = bgColor.match(/\\d+/g);
         let theme = 'light';
         if (rgb) {
-            const b = (parseInt(rgb[0])*299 + parseInt(rgb[1])*587 + parseInt(rgb[2])*114)/1000;
+            const b = (parseInt(rgb[0])*299+parseInt(rgb[1])*587+parseInt(rgb[2])*114)/1000;
             theme = b < 128 ? 'dark' : 'light';
         } else if (isDark) { theme = 'dark'; }
         document.documentElement.setAttribute('data-theme', theme);
@@ -122,7 +125,13 @@ SCALER_PKL = os.path.join(base_path, "loan_scaler.pkl")
 GREEN, RED = "#38a169", "#e53e3e"
 DEPENDENT_MONTHLY_COST = 5000
 
-# ── Pure helper functions (no st calls) ──────────────────────────────────────
+REQUIRED_COLUMNS = [
+    'Applicant_Income', 'Coapplicant_Income', 'Age', 'Dependents',
+    'Credit_Score', 'Existing_Loans', 'DTI_Ratio', 'Savings',
+    'Collateral_Value', 'Loan_Amount', 'Loan_Term',
+]
+
+# ── Pure helper functions ─────────────────────────────────────────────────────
 def calculate_emi(principal: float, annual_rate_pct: float, term_months: int) -> float:
     if term_months <= 0 or principal <= 0:
         return 0.0
@@ -148,28 +157,57 @@ def get_hard_reject_reasons(credit_score, dti, disposable_after_emi,
         reasons.append(f"Collateral (₹{collateral:,.0f}) < 50% of loan (₹{loan_amt:,.0f})")
     return reasons
 
+
+def parse_uploaded_file(uploaded_file, file_format: str):
+    """
+    Read an uploaded file into a DataFrame.
+    Returns (df, error_message). On success error_message is None.
+    """
+    try:
+        uploaded_file.seek(0)
+        if file_format == "CSV":
+            df = pd.read_csv(uploaded_file)
+        elif file_format == "JSON":
+            df = pd.read_json(uploaded_file)
+        else:
+            return None, "SQL upload not supported for direct parsing — using template data instead."
+
+        if df.empty:
+            return None, "Uploaded file is empty."
+
+        missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+        if missing:
+            return None, (
+                f"File is missing required columns: **{', '.join(missing)}**\n\n"
+                "Download the template from column 1 to see the correct format."
+            )
+        return df, None
+
+    except Exception as e:
+        return None, f"Could not read file: {str(e)}"
+
+
 # ── Mock fallback classes ─────────────────────────────────────────────────────
 class MockModel:
     def predict(self, X):
         return np.where(np.random.rand(len(X)) > 0.25, 1, 0)
     def predict_proba(self, X):
-        return np.array([[0.22, 0.78]] * len(X))
+        p = np.random.uniform(0.55, 0.95, len(X))
+        return np.column_stack([1 - p, p])
+
 
 class MockScaler:
     def __init__(self):
-        self.feature_names_in_ = [
-            'Applicant_Income', 'Coapplicant_Income', 'Age', 'Dependents',
-            'Credit_Score', 'Existing_Loans', 'DTI_Ratio', 'Savings',
-            'Collateral_Value', 'Loan_Amount', 'Loan_Term',
-        ]
+        self.feature_names_in_ = REQUIRED_COLUMNS
     def transform(self, X):
         return np.array(X, dtype=np.float32)
+
 
 # ── Cached loaders ────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_assets():
     if not os.path.exists(MODEL_PKL) or not os.path.exists(SCALER_PKL):
-        return MockModel(), MockScaler(), True   # True = is_mock
+        return MockModel(), MockScaler(), True
     try:
         with open(MODEL_PKL, 'rb') as f:
             model = pickle.load(f)
@@ -202,10 +240,8 @@ def load_data(path: str) -> pd.DataFrame:
             '0': 'Rejected', '0.0': 'Rejected', 'rejected': 'Rejected',
             'no': 'Rejected', 'n': 'Rejected', '-': 'Rejected',
         })
-    data[data.select_dtypes('float64').columns] = \
-        data.select_dtypes('float64').astype('float32')
-    data[data.select_dtypes('int64').columns] = \
-        data.select_dtypes('int64').astype('int32')
+    data[data.select_dtypes('float64').columns] = data.select_dtypes('float64').astype('float32')
+    data[data.select_dtypes('int64').columns]   = data.select_dtypes('int64').astype('int32')
     return data
 
 
@@ -240,7 +276,8 @@ def run_prediction(income_i, co_income_i, age_i, dependents_i, credit_score_i,
     confidence_scores = _model_ref.predict_proba(scaled_inp)[0]
     return int(prediction), float(confidence_scores[0]*100), float(confidence_scores[1]*100)
 
-# ── Load data & model (after set_page_config, session_state already init) ─────
+
+# ── Load data & model ─────────────────────────────────────────────────────────
 df_all = load_data(DATA_PATH)
 model, scaler, is_mock = load_assets()
 
@@ -261,25 +298,18 @@ tpl_data = pd.DataFrame([{
 with st.sidebar:
     st.markdown("## 💰 Loan Approval AI")
     st.markdown("---")
-
     purpose_list = (sorted(df_all['Loan_Purpose'].dropna().unique())
-                    if 'Loan_Purpose' in df_all.columns
-                    else ['Home', 'Personal', 'Education', 'Business'])
+                    if 'Loan_Purpose' in df_all.columns else ['Home','Personal','Education','Business'])
     purpose_f = st.multiselect("Loan Purpose", purpose_list, default=purpose_list)
-
     gender_list = (sorted(df_all['Gender'].dropna().unique())
-                   if 'Gender' in df_all.columns else ['Male', 'Female'])
+                   if 'Gender' in df_all.columns else ['Male','Female'])
     gender_f = st.multiselect("Gender", gender_list, default=gender_list)
-
     age_f = st.slider("Age Range", 18, 80, (18, 80))
 
     df = df_all.copy()
-    if 'Loan_Purpose' in df_all.columns:
-        df = df[df['Loan_Purpose'].isin(purpose_f)]
-    if 'Gender' in df_all.columns:
-        df = df[df['Gender'].isin(gender_f)]
-    if 'Age' in df_all.columns:
-        df = df[df['Age'].between(age_f[0], age_f[1])]
+    if 'Loan_Purpose' in df_all.columns: df = df[df['Loan_Purpose'].isin(purpose_f)]
+    if 'Gender'       in df_all.columns: df = df[df['Gender'].isin(gender_f)]
+    if 'Age'          in df_all.columns: df = df[df['Age'].between(age_f[0], age_f[1])]
 
     st.markdown("---")
     st.info("Risk assessment calibrated to Income, Debt & Credit Score.")
@@ -301,25 +331,20 @@ with tab1:
     if not df.empty and 'Loan_Approved' in df.columns:
         app_n = len(df[df['Loan_Approved'] == 'Approved'])
         rej_n = len(df[df['Loan_Approved'] == 'Rejected'])
-
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Total Applications",    f"{len(df):,}")
-        k2.metric("Approved ✅",            f"{app_n:,}")
-        k3.metric("Rejected ❌",            f"{rej_n:,}")
-        k4.metric("Avg Applicant Income",  f"₹{int(df['Applicant_Income'].mean()):,}")
-
+        k1.metric("Total Applications",   f"{len(df):,}")
+        k2.metric("Approved ✅",           f"{app_n:,}")
+        k3.metric("Rejected ❌",           f"{rej_n:,}")
+        k4.metric("Avg Applicant Income", f"₹{int(df['Applicant_Income'].mean()):,}")
         st.markdown("<br>", unsafe_allow_html=True)
         c1, c2 = st.columns([1, 1.4])
-
         with c1:
             st.markdown('<div class="section-card"><div class="section-title">Approval Share</div>', unsafe_allow_html=True)
-            fig = px.pie(df, names='Loan_Approved', hole=0.5,
-                         color='Loan_Approved',
+            fig = px.pie(df, names='Loan_Approved', hole=0.5, color='Loan_Approved',
                          color_discrete_map={'Approved': GREEN, 'Rejected': RED})
             fig.update_layout(margin=dict(t=10, b=10), height=300)
             st.plotly_chart(fig, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
-
         with c2:
             st.markdown('<div class="section-card"><div class="section-title">Loan Amount Analysis</div>', unsafe_allow_html=True)
             chart_df = df.sample(n=min(10000, len(df)), random_state=42) if len(df) > 15000 else df
@@ -337,11 +362,9 @@ with tab1:
 # ══════════════════════════════════════════════════════════════════════════════
 with tab2:
     st.markdown("<br>", unsafe_allow_html=True)
-
     with st.form("predict_form", border=False):
         st.markdown('<div class="section-card"><div class="section-title">Risk Profile Assessment</div>', unsafe_allow_html=True)
         col1, col2 = st.columns(2)
-
         with col1:
             gender_i       = st.selectbox("Gender", ["Male", "Female"])
             age_i          = st.slider("Applicant Age", 18, 80, 35)
@@ -350,18 +373,16 @@ with tab2:
             loan_amt_i     = st.number_input("Requested Loan Amount (₹)", 0, 50_000_000, 500_000, step=50_000)
             loan_term_i    = st.selectbox("Loan Term (Months)", [12, 36, 60, 120, 180, 240, 360])
             credit_score_i = st.slider("Credit Score", 300, 900, 700)
-
         with col2:
             employment_i     = st.selectbox("Employment Status", ["Employed", "Self-Employed", "Unemployed"])
             marital_i        = st.selectbox("Marital Status", ["Married", "Single"])
             dependents_i     = st.slider("Number of Dependents", 0, 10, 2)
             existing_loans_i = st.slider("Active Existing Loans", 0, 5, 0)
-            existing_debt_i  = st.number_input("Existing Monthly Debt Payments (₹)", 0, 500_000, 5_000, step=1_000,
+            existing_debt_i  = st.number_input("Existing Monthly Debt (₹)", 0, 500_000, 5_000, step=1_000,
                                                help="Total EMIs the applicant already pays monthly.")
-            interest_rate_i  = st.number_input("Indicative Annual Interest Rate (%)", 1.0, 30.0, 9.0, step=0.5)
+            interest_rate_i  = st.number_input("Annual Interest Rate (%)", 1.0, 30.0, 9.0, step=0.5)
             savings_i        = st.number_input("Savings Balance (₹)", 0, 10_000_000, 200_000, step=25_000)
             collateral_i     = st.number_input("Collateral Value (₹)", 0, 50_000_000, 600_000, step=50_000)
-
         st.markdown('</div>', unsafe_allow_html=True)
 
         new_loan_emi         = calculate_emi(loan_amt_i, interest_rate_i, loan_term_i)
@@ -371,45 +392,37 @@ with tab2:
         disposable_income    = total_monthly_income - (dependents_i * DEPENDENT_MONTHLY_COST) - existing_debt_i
         disposable_after_emi = disposable_income - new_loan_emi
 
-        st.markdown('<div class="section-card"><div class="section-title">Calculated Affordability (auto-derived)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-card"><div class="section-title">Calculated Affordability</div>', unsafe_allow_html=True)
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Est. EMI",               f"₹{new_loan_emi:,.0f}/mo")
-        m2.metric("Total Monthly Income",   f"₹{total_monthly_income:,.0f}")
-        m3.metric("DTI Ratio",              f"{dti_calculated*100:.1f}%")
-        m4.metric("Disposable after EMI",   f"₹{disposable_after_emi:,.0f}")
+        m1.metric("Est. EMI",             f"₹{new_loan_emi:,.0f}/mo")
+        m2.metric("Total Monthly Income", f"₹{total_monthly_income:,.0f}")
+        m3.metric("DTI Ratio",            f"{dti_calculated*100:.1f}%")
+        m4.metric("Disposable after EMI", f"₹{disposable_after_emi:,.0f}")
         st.markdown('</div>', unsafe_allow_html=True)
 
         submitted = st.form_submit_button("⚡ Run AI Loan Validation", type="primary", use_container_width=True)
 
     if submitted:
-        # Scorecard
         score_status = "pass" if credit_score_i >= 750 else ("warn" if credit_score_i >= 650 else "fail")
-        score_reason = {"pass": "Excellent Credit Worthiness", "warn": "Fair Credit Standing", "fail": "Subprime Score — High Risk"}[score_status]
-
-        dti_status = "pass" if dti_calculated <= 0.40 else ("warn" if dti_calculated <= 0.55 else "fail")
-        dti_reason = {"pass": "Healthy Debt Burden", "warn": "Elevated Debt Load", "fail": "Over-leveraged Profile"}[dti_status]
-
-        inc_status = "pass" if disposable_after_emi >= new_loan_emi * 0.2 else ("warn" if disposable_after_emi >= 0 else "fail")
-        inc_reason = {"pass": "Comfortable repayment capacity", "warn": "Tight repayment capacity",
-                      "fail": "Insufficient income after dependents & existing debt"}[inc_status]
-
-        dep_status = "pass" if dependents_i <= 2 else ("warn" if dependents_i <= 4 else "fail")
-        dep_reason = {"pass": "Manageable household size", "warn": "Larger household increases burden",
-                      "fail": "High dependents reduce disposable income"}[dep_status]
-
-        coll_status = "pass" if collateral_i >= loan_amt_i else "warn"
-        coll_reason = "Fully Secured Asset Backing" if coll_status == "pass" else "Loan Value Exceeds Asset Cover"
-
-        emp_status = "fail" if employment_i == "Unemployed" else "pass"
-        emp_reason = "No verifiable source of income" if emp_status == "fail" else "Stable occupation status"
+        score_reason = {"pass":"Excellent Credit Worthiness","warn":"Fair Credit Standing","fail":"Subprime Score — High Risk"}[score_status]
+        dti_status   = "pass" if dti_calculated <= 0.40 else ("warn" if dti_calculated <= 0.55 else "fail")
+        dti_reason   = {"pass":"Healthy Debt Burden","warn":"Elevated Debt Load","fail":"Over-leveraged Profile"}[dti_status]
+        inc_status   = "pass" if disposable_after_emi >= new_loan_emi*0.2 else ("warn" if disposable_after_emi >= 0 else "fail")
+        inc_reason   = {"pass":"Comfortable repayment capacity","warn":"Tight repayment capacity","fail":"Insufficient income after dependents & debt"}[inc_status]
+        dep_status   = "pass" if dependents_i <= 2 else ("warn" if dependents_i <= 4 else "fail")
+        dep_reason   = {"pass":"Manageable household size","warn":"Larger household increases burden","fail":"High dependents reduce disposable income"}[dep_status]
+        coll_status  = "pass" if collateral_i >= loan_amt_i else "warn"
+        coll_reason  = "Fully Secured Asset Backing" if coll_status == "pass" else "Loan Value Exceeds Asset Cover"
+        emp_status   = "fail" if employment_i == "Unemployed" else "pass"
+        emp_reason   = "No verifiable source of income" if emp_status == "fail" else "Stable occupation status"
 
         factors = [
-            {"label": "Credit Score",          "value": str(credit_score_i),           "status": score_status, "reason": score_reason},
-            {"label": "DTI Ratio",             "value": f"{dti_calculated*100:.1f}%",  "status": dti_status,   "reason": dti_reason},
-            {"label": "Affordability",         "value": f"₹{disposable_after_emi:,.0f}", "status": inc_status, "reason": inc_reason},
-            {"label": "Dependents Load",       "value": str(dependents_i),             "status": dep_status,   "reason": dep_reason},
-            {"label": "Collateral Cover",      "value": f"₹{collateral_i:,.0f}",       "status": coll_status,  "reason": coll_reason},
-            {"label": "Employment",            "value": employment_i,                  "status": emp_status,   "reason": emp_reason},
+            {"label":"Credit Score",    "value":str(credit_score_i),             "status":score_status, "reason":score_reason},
+            {"label":"DTI Ratio",       "value":f"{dti_calculated*100:.1f}%",    "status":dti_status,   "reason":dti_reason},
+            {"label":"Affordability",   "value":f"₹{disposable_after_emi:,.0f}", "status":inc_status,   "reason":inc_reason},
+            {"label":"Dependents",      "value":str(dependents_i),               "status":dep_status,   "reason":dep_reason},
+            {"label":"Collateral",      "value":f"₹{collateral_i:,.0f}",         "status":coll_status,  "reason":coll_reason},
+            {"label":"Employment",      "value":employment_i,                    "status":emp_status,   "reason":emp_reason},
         ]
         fail_factors = [f for f in factors if f["status"] == "fail"]
 
@@ -424,11 +437,9 @@ with tab2:
             credit_score_i, dti_calculated, disposable_after_emi,
             employment_i, collateral_i, loan_amt_i,
         )
-
         approved = (prediction == 1) and (len(hard_reject_reasons) == 0)
         conf_pct = prob_1 if approved else prob_0
-        if hard_reject_reasons:
-            conf_pct = max(conf_pct, 90.0)
+        if hard_reject_reasons: conf_pct = max(conf_pct, 90.0)
         conf_pct = min(99.5, max(50.0, conf_pct))
 
         review_flags = []
@@ -439,52 +450,40 @@ with tab2:
 
         if approved:
             st.balloons()
-            color_box, icon, title, txt_color = "#f0fff4", "✓", "Loan Facility Approved", "#38a169"
+            color_box, icon, title, txt_color = "#f0fff4","✓","Loan Facility Approved","#38a169"
         else:
-            color_box, icon, title, txt_color = "#fff5f5", "✗", "Loan Facility Rejected", "#e53e3e"
+            color_box, icon, title, txt_color = "#fff5f5","✗","Loan Facility Rejected","#e53e3e"
 
         st.markdown(f"""
-        <div style="background:{color_box}; border:2px solid {txt_color}; border-radius:14px;
-                    padding:1.25rem; display:flex; align-items:center; gap:16px;">
+        <div style="background:{color_box};border:2px solid {txt_color};border-radius:14px;
+                    padding:1.25rem;display:flex;align-items:center;gap:16px;">
             <div style="font-size:30px;">{icon}</div>
-            <div>
-                <b style="color:{txt_color}; font-size:18px;">{title}</b><br>
-                <small>AI Confidence: {conf_pct:.1f}%</small>
-            </div>
+            <div><b style="color:{txt_color};font-size:18px;">{title}</b><br>
+            <small>AI Confidence: {conf_pct:.1f}%</small></div>
         </div>""", unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
-        status_cfg = {
-            "pass": ("#d1fae5", "#065f46"),
-            "warn": ("#fef9c3", "#713f12"),
-            "fail": ("#fee2e2", "#7f1d1d"),
-        }
-        cols = st.columns(len(factors))
-        for col, f in zip(cols, factors):
+        status_cfg = {"pass":("#d1fae5","#065f46"),"warn":("#fef9c3","#713f12"),"fail":("#fee2e2","#7f1d1d")}
+        for col, f in zip(st.columns(len(factors)), factors):
             bg, txt = status_cfg[f["status"]]
             col.markdown(
-                f'<div style="background:{bg}; padding:12px; border-radius:8px; border:1px solid rgba(0,0,0,0.05);">'
-                f'<small style="color:{txt}; font-weight:600;">{f["label"]}</small><br>'
-                f'<b style="color:{txt}; font-size:16px;">{f["value"]}</b></div>',
-                unsafe_allow_html=True,
-            )
+                f'<div style="background:{bg};padding:12px;border-radius:8px;border:1px solid rgba(0,0,0,0.05);">'
+                f'<small style="color:{txt};font-weight:600;">{f["label"]}</small><br>'
+                f'<b style="color:{txt};font-size:16px;">{f["value"]}</b></div>',
+                unsafe_allow_html=True)
 
         if hard_reject_reasons:
             st.error("🚫 Hard Policy Rejection:")
-            for r in hard_reject_reasons:
-                st.write(f"- {r}")
+            for r in hard_reject_reasons: st.write(f"- {r}")
         elif not approved and fail_factors:
             st.error("Policy Deficiencies:")
-            for f in fail_factors:
-                st.write(f"- {f['reason']}")
-
+            for f in fail_factors: st.write(f"- {f['reason']}")
         if review_flags:
             st.warning("⚠️ Flagged for manual review:")
-            for r in review_flags:
-                st.write(f"- {r}")
+            for r in review_flags: st.write(f"- {r}")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — BULK SCANNER
+# TAB 4 — BULK SCANNER  (file persisted in session_state)
 # ══════════════════════════════════════════════════════════════════════════════
 with tab4:
     st.markdown("<br>", unsafe_allow_html=True)
@@ -492,121 +491,171 @@ with tab4:
 
     col1, col2, col3 = st.columns(3, gap="medium")
 
+    # ── Column 1: Template download ───────────────────────────────────────────
     with col1:
-        st.markdown('<div class="card-container"><div class="card-header">📂 1. Structure Blueprint</div>', unsafe_allow_html=True)
-        tpl_type = st.selectbox("Format", ["CSV", "JSON", "SQL"], key="tpl_fmt")
+        st.markdown('<div class="card-container"><div class="card-header">📂 1. Download Template</div>', unsafe_allow_html=True)
+        tpl_type = st.selectbox("Format", ["CSV", "JSON"], key="tpl_fmt")
         if tpl_type == "CSV":
-            st.download_button("📥 Download Template (CSV)",  tpl_data.to_csv(index=False), "loan_template.csv",  use_container_width=True)
-        elif tpl_type == "JSON":
-            st.download_button("📥 Download Template (JSON)", tpl_data.to_json(orient="records", indent=4), "loan_template.json", use_container_width=True)
+            st.download_button("📥 Download CSV Template", tpl_data.to_csv(index=False),
+                               "loan_template.csv", mime="text/csv", use_container_width=True)
         else:
-            sql_txt = f"INSERT INTO pipeline_loan VALUES {tuple(tpl_data.iloc[0].values)};"
-            st.download_button("📥 Download Template (SQL)",  sql_txt, "loan_template.sql", use_container_width=True)
+            st.download_button("📥 Download JSON Template",
+                               tpl_data.to_json(orient="records", indent=4),
+                               "loan_template.json", mime="application/json", use_container_width=True)
+
+        st.markdown("**Required columns:**")
+        for c in REQUIRED_COLUMNS:
+            st.markdown(f"- `{c}`")
         st.markdown('</div>', unsafe_allow_html=True)
 
+    # ── Column 2: Upload & Run ────────────────────────────────────────────────
     with col2:
-        st.markdown('<div class="card-container"><div class="card-header">🔍 2. Ingestion Gateway</div>', unsafe_allow_html=True)
-        upload_mode    = st.radio("Source", ["Local Upload", "Cloud Vault"], horizontal=True, key="scan_mode")
-        raw_input_data = None
+        st.markdown('<div class="card-container"><div class="card-header">🔍 2. Upload & Process</div>', unsafe_allow_html=True)
 
-        if upload_mode == "Local Upload":
-            file_format = st.selectbox("File Format", ["CSV", "JSON", "SQL"], key="file_fmt")
-            if file_format == "CSV":
-                up_f = st.file_uploader("Upload CSV", type=["csv"], key="csv_up", label_visibility="collapsed")
-                if up_f:
-                    raw_input_data = pd.read_csv(up_f)
-            elif file_format == "JSON":
-                up_f = st.file_uploader("Upload JSON", type=["json"], key="json_up", label_visibility="collapsed")
-                if up_f:
-                    raw_input_data = pd.read_json(up_f)
+        file_format = st.selectbox("File Format", ["CSV", "JSON"], key="bulk_file_fmt")
+
+        # File uploader — key changes when format changes to force reset
+        up_f = st.file_uploader(
+            f"Upload {file_format} file",
+            type=["csv"] if file_format == "CSV" else ["json"],
+            key=f"uploader_{file_format}",
+        )
+
+        # ── Parse file the moment it's uploaded & store in session_state ──────
+        if up_f is not None:
+            parsed_df, parse_error = parse_uploaded_file(up_f, file_format)
+            if parse_error:
+                st.session_state.upload_error  = parse_error
+                st.session_state.uploaded_df   = None
             else:
-                up_f = st.file_uploader("Upload SQL", type=["sql"], key="sql_up", label_visibility="collapsed")
-                if up_f:
-                    st.info("Ingesting SQL logs...")
-                    raw_input_data = tpl_data.copy()
+                st.session_state.uploaded_df   = parsed_df
+                st.session_state.upload_error  = None
+
+        # Show any parse errors
+        if st.session_state.upload_error:
+            st.error(f"❌ {st.session_state.upload_error}")
+
+        # Show preview and Run button if data is loaded
+        if st.session_state.uploaded_df is not None:
+            udf = st.session_state.uploaded_df
+            st.success(f"✅ File loaded — {len(udf):,} rows × {len(udf.columns)} columns")
+            st.dataframe(udf.head(5), use_container_width=True)
+
+            if st.button("🚀 Run AI Pipeline", type="primary", use_container_width=True, key="run_pipeline"):
+                with st.spinner(f"Processing {len(udf):,} applications…"):
+                    try:
+                        original_display = udf.copy()
+
+                        # Build feature matrix
+                        predict_input = original_display[REQUIRED_COLUMNS].copy().fillna(0)
+
+                        try:
+                            m_feat = list(scaler.feature_names_in_)
+                        except AttributeError:
+                            m_feat = REQUIRED_COLUMNS
+
+                        predict_input = predict_input.reindex(columns=m_feat, fill_value=0)
+                        scaled_matrix = scaler.transform(predict_input)
+                        preds         = model.predict(scaled_matrix)
+                        probs         = model.predict_proba(scaled_matrix)
+
+                        res_final = original_display.copy()
+
+                        # Hard policy overrides
+                        override_mask = pd.Series([False] * len(res_final), index=res_final.index)
+                        if 'Loan_Amount' in res_final.columns and 'Loan_Term' in res_final.columns:
+                            calc_install      = res_final['Loan_Amount'] / res_final['Loan_Term'].replace(0, np.nan)
+                            calc_income_total = (res_final['Applicant_Income'] + res_final['Coapplicant_Income']).replace(0, np.nan)
+                            override_mask = (
+                                (calc_install / calc_income_total > 0.65) |
+                                (res_final['Credit_Score'] < 500) |
+                                (res_final['DTI_Ratio'] > 0.65)
+                            ).fillna(False)
+
+                        res_final['AI_Decision']   = np.where(preds == 1, "Approved", "Rejected")
+                        res_final.loc[override_mask, 'AI_Decision'] = "Rejected"
+                        res_final['AI_Confidence'] = np.round(np.max(probs, axis=1) * 100, 1)
+                        res_final['Trust_Score']   = np.where(
+                            res_final['AI_Decision'] == "Approved",
+                            np.random.uniform(88, 99, len(res_final)),
+                            np.random.uniform(10, 42, len(res_final)),
+                        )
+
+                        st.session_state.result_df = res_final
+                        st.session_state.scan_done = True
+                        st.toast("✅ Pipeline complete!", icon="🎯")
+
+                    except Exception as e:
+                        st.error(f"❌ Pipeline error: {str(e)}")
+
         else:
-            drive_url = st.text_input("🔗 Google Drive Link", placeholder="https://drive.google.com/...", key="drive_url")
-            if drive_url and "drive.google.com" in drive_url:
-                try:
-                    f_id = drive_url.split("/d/")[1].split("/")[0]
-                    raw_input_data = pd.read_csv(f"https://drive.google.com/uc?export=download&id={f_id}")
-                except Exception:
-                    st.error("Could not load from Drive link.")
+            st.info("👆 Upload a file above to begin.")
 
-        if raw_input_data is not None:
-            if st.button("🚀 Run AI Pipeline", type="primary", use_container_width=True):
-                original_display = raw_input_data.copy()
-                predict_hidden   = pd.get_dummies(original_display)
-                predict_hidden   = predict_hidden.loc[:, ~predict_hidden.columns.duplicated()].copy()
-
-                try:
-                    m_feat = scaler.feature_names_in_
-                except AttributeError:
-                    m_feat = FEATURES
-
-                predict_hidden = predict_hidden.reindex(columns=m_feat, fill_value=0).fillna(0)
-                scaled_matrix  = scaler.transform(predict_hidden)
-                preds          = model.predict(scaled_matrix)
-                probs          = model.predict_proba(scaled_matrix)
-
-                res_final = original_display.copy()
-
-                if 'Loan_Amount' in res_final.columns and 'Loan_Term' in res_final.columns:
-                    calc_install      = res_final['Loan_Amount'] / res_final['Loan_Term']
-                    calc_income_total = res_final['Applicant_Income'] + res_final['Coapplicant_Income']
-                    override_mask = (
-                        (calc_install / calc_income_total > 0.65) |
-                        (res_final['Credit_Score'] < 500) |
-                        (res_final['DTI_Ratio'] > 0.65)
-                    )
-                else:
-                    override_mask = pd.Series([False] * len(res_final))
-
-                res_final['AI_Decision']   = np.where(preds == 1, "Approved", "Rejected")
-                res_final.loc[override_mask, 'AI_Decision'] = "Rejected"
-                res_final['AI_Confidence'] = np.round(np.max(probs, axis=1) * 100, 1)
-                res_final['Trust_Score']   = np.where(
-                    res_final['AI_Decision'] == "Approved",
-                    np.random.uniform(88, 99, len(res_final)),
-                    np.random.uniform(10, 42, len(res_final)),
-                )
-
-                st.session_state.result_df = res_final
-                st.session_state.scan_done = True
-                st.toast("Pipeline Evaluation Complete!")
+        # Clear button
+        if st.session_state.uploaded_df is not None or st.session_state.scan_done:
+            if st.button("🗑️ Clear & Reset", key="clear_btn"):
+                st.session_state.uploaded_df  = None
+                st.session_state.upload_error = None
+                st.session_state.scan_done    = False
+                st.session_state.result_df    = None
+                st.rerun()
 
         st.markdown('</div>', unsafe_allow_html=True)
 
+    # ── Column 3: Export ──────────────────────────────────────────────────────
     with col3:
         st.markdown('<div class="card-container"><div class="card-header">📊 3. Export Results</div>', unsafe_allow_html=True)
         if st.session_state.scan_done and st.session_state.result_df is not None:
-            exp_fmt = st.selectbox("Export Format", ["CSV", "JSON", "SQL"], key="exp_fmt")
+            exp_fmt = st.selectbox("Export Format", ["CSV", "JSON"], key="exp_fmt")
             if exp_fmt == "CSV":
-                st.download_button("💾 Export CSV", st.session_state.result_df.to_csv(index=False), "loan_report.csv", use_container_width=True)
-            elif exp_fmt == "JSON":
-                st.download_button("💾 Export JSON", st.session_state.result_df.to_json(orient="records", indent=4), "loan_report.json", use_container_width=True)
+                st.download_button(
+                    "💾 Download CSV Results",
+                    st.session_state.result_df.to_csv(index=False),
+                    "loan_results.csv", mime="text/csv", use_container_width=True,
+                )
             else:
-                sql_out = f"INSERT INTO loan_predictions VALUES {str([tuple(x) for x in st.session_state.result_df.head(1000).values])};"
-                st.download_button("💾 Export SQL (top 1k)", sql_out, "loan_report.sql", use_container_width=True)
+                st.download_button(
+                    "💾 Download JSON Results",
+                    st.session_state.result_df.to_json(orient="records", indent=4),
+                    "loan_results.json", mime="application/json", use_container_width=True,
+                )
         else:
+            st.info("Results will appear here after running the pipeline.")
             st.button("🔒 Run pipeline first", disabled=True, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ── Audit Logs ────────────────────────────────────────────────────────────────
 if st.session_state.scan_done and st.session_state.result_df is not None:
     st.markdown("---")
-    st.markdown("### 🎯 Audit Pipeline Logs")
-    view_df = st.session_state.result_df
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Batch Size",        len(view_df))
-    m2.metric("Approved",          len(view_df[view_df['AI_Decision'] == "Approved"]))
-    m3.metric("Rejected",          len(view_df[view_df['AI_Decision'] == "Rejected"]), delta_color="inverse")
-    m4.metric("Avg Trust Score",   f"{view_df['Trust_Score'].mean():.1f}%")
+    st.markdown("### 🎯 Audit Pipeline Results")
 
-    try:
-        st.dataframe(
-            view_df.head(1000).style.background_gradient(subset=['Trust_Score'], cmap='RdYlGn'),
-            use_container_width=True, height=550,
+    view_df  = st.session_state.result_df
+    approved = len(view_df[view_df['AI_Decision'] == "Approved"])
+    rejected = len(view_df[view_df['AI_Decision'] == "Rejected"])
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Processed",  f"{len(view_df):,}")
+    m2.metric("✅ Approved",       f"{approved:,}")
+    m3.metric("❌ Rejected",       f"{rejected:,}",  delta_color="inverse")
+    m4.metric("Avg Trust Score",  f"{view_df['Trust_Score'].mean():.1f}%")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Approval pie
+    pie_col, tbl_col = st.columns([1, 2])
+    with pie_col:
+        fig_pie = px.pie(
+            values=[approved, rejected], names=["Approved", "Rejected"],
+            hole=0.5, color_discrete_sequence=[GREEN, RED],
         )
-    except Exception:
-        st.dataframe(view_df.head(1000), use_container_width=True, height=550)
+        fig_pie.update_layout(margin=dict(t=10, b=10), height=250)
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    with tbl_col:
+        try:
+            st.dataframe(
+                view_df.style.background_gradient(subset=['Trust_Score'], cmap='RdYlGn'),
+                use_container_width=True, height=300,
+            )
+        except Exception:
+            st.dataframe(view_df, use_container_width=True, height=300)
