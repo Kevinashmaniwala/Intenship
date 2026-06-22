@@ -18,13 +18,12 @@ st.set_page_config(
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght=300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
 
 html, body, [class*="css"], .stApp {
     font-family: 'Plus Jakarta Sans', sans-serif !important;
 }
 
-/* ── LIGHT MODE ── */
 [data-theme="light"] .stApp,
 [data-theme="light"] [data-testid="stAppViewContainer"],
 [data-theme="light"] [data-testid="stAppViewContainer"] > .main,
@@ -58,7 +57,6 @@ html, body, [class*="css"], .stApp {
     border-bottom: 1.5px solid #ebf4ff !important;
 }
 
-/* ── DARK MODE ── */
 [data-theme="dark"] .stApp,
 [data-theme="dark"] [data-testid="stAppViewContainer"],
 [data-theme="dark"] [data-testid="stAppViewContainer"] > .main,
@@ -149,7 +147,6 @@ html, body, [class*="css"], .stApp {
     background: #1e2130 !important;
 }
 
-/* ── COMMON ── */
 .section-card, .card-container {
     border-radius: 14px;
     padding: 1.25rem 1.5rem 1.5rem;
@@ -192,18 +189,15 @@ html, body, [class*="css"], .stApp {
         const bgColor = getComputedStyle(document.body).backgroundColor;
         const rgb = bgColor.match(/\\d+/g);
         let theme = 'light';
-        
         if (rgb) {
             const brightness = (parseInt(rgb[0]) * 299 + parseInt(rgb[1]) * 587 + parseInt(rgb[2]) * 114) / 1000;
             theme = brightness < 128 ? 'dark' : 'light';
         } else if (isDark) {
             theme = 'dark';
         }
-
         document.documentElement.setAttribute('data-theme', theme);
         document.body.setAttribute('data-theme', theme);
     }
-
     applyTheme();
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
     setInterval(applyTheme, 1000);
@@ -215,31 +209,17 @@ html, body, [class*="css"], .stApp {
 base_path = os.path.dirname(os.path.abspath(__file__))
 
 DATA_PATH   = os.path.join(base_path, "loan_clean_data.parquet")
-MODEL_PKL  = os.path.join(base_path, "loan_model.pkl")
-SCALER_PKL = os.path.join(base_path, "loan_scaler.pkl")
+MODEL_PKL   = os.path.join(base_path, "loan_model.pkl")
+SCALER_PKL  = os.path.join(base_path, "loan_scaler.pkl")
 
 GREEN, RED = "#38a169", "#e53e3e"
 
-# Estimated monthly living cost per dependent (₹)
 DEPENDENT_MONTHLY_COST = 5000
 
 
 # ── Helper Functions ──────────────────────────────────────────────────────────
 
 def calculate_emi(principal: float, annual_rate_pct: float, term_months: int) -> float:
-    """
-    Calculate Equated Monthly Installment using the standard amortization formula.
-
-    Parameters
-    ----------
-    principal       : Loan amount in ₹
-    annual_rate_pct : Annual interest rate in percent (e.g. 9.0 for 9%)
-    term_months     : Loan tenure in months
-
-    Returns
-    -------
-    EMI in ₹ (float)
-    """
     if term_months <= 0 or principal <= 0:
         return 0.0
     monthly_rate = annual_rate_pct / (12.0 * 100.0)
@@ -262,53 +242,23 @@ def get_hard_reject_reasons(
     collateral: float,
     loan_amt: float,
 ) -> list:
-    """
-    Return a list of hard policy violations that trigger automatic rejection
-    regardless of what the ML model predicts.
-
-    Parameters
-    ----------
-    credit_score        : Applicant's credit score (300–900)
-    dti                 : Debt-to-income ratio (0–1)
-    disposable_after_emi: Monthly income remaining after dependents' costs,
-                          existing debt, and the new EMI (₹)
-    employment          : Employment status string
-    collateral          : Collateral value in ₹
-    loan_amt            : Requested loan amount in ₹
-
-    Returns
-    -------
-    List of human-readable rejection reason strings (empty = no hard violation)
-    """
     reasons = []
-
     if credit_score < 500:
-        reasons.append(
-            f"Credit score {credit_score} is below the minimum threshold of 500"
-        )
-
+        reasons.append(f"Credit score {credit_score} is below the minimum threshold of 500")
     if dti > 0.65:
-        reasons.append(
-            f"DTI ratio {dti * 100:.1f}% exceeds the hard policy cap of 65%"
-        )
-
+        reasons.append(f"DTI ratio {dti * 100:.1f}% exceeds the hard policy cap of 65%")
     if disposable_after_emi < 0:
         reasons.append(
             "Disposable income after EMI and dependents' living costs is negative — "
             "applicant cannot service this loan"
         )
-
     if employment == "Unemployed":
-        reasons.append(
-            "Applicant has no verifiable source of income (Employment Status: Unemployed)"
-        )
-
+        reasons.append("Applicant has no verifiable source of income (Employment Status: Unemployed)")
     if loan_amt > 0 and collateral < loan_amt * 0.50:
         reasons.append(
-            f"Collateral (₹{collateral:,.0f}) covers less than 50 % of the "
+            f"Collateral (₹{collateral:,.0f}) covers less than 50% of the "
             f"requested loan amount (₹{loan_amt:,.0f})"
         )
-
     return reasons
 
 
@@ -355,19 +305,12 @@ def load_assets():
         return MockModel(), MockScaler()
 
 
-
-# ── Cached prediction (identical inputs → instant replay, no model re-call) ───
 @st.cache_data(show_spinner=False)
 def run_prediction(
     income_i, co_income_i, age_i, dependents_i, credit_score_i,
     existing_loans_i, dti_calculated, savings_i, collateral_i,
     loan_amt_i, loan_term_i, _model_ref, _scaler_ref,
 ):
-    """
-    Run the ML model and return (prediction, prob_0, prob_1).
-    Results are cached: changing nothing → instant; changing any value → fresh call.
-    Prefixed _ args are excluded from the cache key (non-hashable objects).
-    """
     input_data = {
         'Applicant_Income':   [float(income_i)],
         'Coapplicant_Income': [float(co_income_i)],
@@ -397,9 +340,9 @@ def run_prediction(
     confidence_scores = _model_ref.predict_proba(scaled_inp)[0]
     return int(prediction), float(confidence_scores[0] * 100), float(confidence_scores[1] * 100)
 
+
 @st.cache_data(show_spinner="Loading dataset…")
 def load_data(path: str) -> pd.DataFrame:
-    """Read and normalise the loan CSV once; cached across reruns."""
     if not os.path.exists(path):
         return pd.DataFrame([{
             'Applicant_ID': 1001, 'Applicant_Income': 65000, 'Coapplicant_Income': 20000,
@@ -426,30 +369,23 @@ def load_data(path: str) -> pd.DataFrame:
     data[int_cols]   = data[int_cols].astype('int32')
     return data
 
+
+# ── Load Data & Model (NO st.stop() here) ────────────────────────────────────
 df_all = load_data(DATA_PATH)
-
-
-
-# st.write("DATA LOADED")
-# st.write("Rows:", len(df_all))
-# st.write("Columns:", len(df_all.columns))
-
-st.stop()
-
-model, scaler = load_assets()
-# model, scaler = load_assets()
-
-# numeric_df = df_all.select_dtypes(include=['int32', 'int64', 'float32', 'float64'])
-# FEATURES = [c for c in numeric_df.columns if c not in ['Loan_Approved', 'Applicant_ID']]
-
-if len(df_all) > 1000:
-    df_dashboard = df_all.head(1000)
-else:
-    df_dashboard = df_all.copy()
-
 model, scaler = load_assets()
 
+# ── Build FEATURES list from numeric columns ──────────────────────────────────
 numeric_df = df_all.select_dtypes(include=['int32', 'int64', 'float32', 'float64'])
+FEATURES = [c for c in numeric_df.columns if c not in ['Loan_Approved', 'Applicant_ID']]
+
+# ── Template data for bulk scanner (defined once, used later) ─────────────────
+tpl_data = pd.DataFrame([{
+    'Applicant_Income': 75000, 'Coapplicant_Income': 25000, 'Age': 35,
+    'Dependents': 2, 'Credit_Score': 720, 'Existing_Loans': 0,
+    'DTI_Ratio': 0.35, 'Savings': 200000, 'Collateral_Value': 600000,
+    'Loan_Amount': 500000, 'Loan_Term': 180,
+}])
+
 # ── Sidebar Filters ───────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 💰 Loan Approval AI")
@@ -471,11 +407,14 @@ with st.sidebar:
 
     age_f = st.slider("Age Range", 18, 80, (18, 80))
 
-    df = df_all[
-        (df_all['Loan_Purpose'].isin(purpose_f) if 'Loan_Purpose' in df_all.columns else True) &
-        (df_all['Gender'].isin(gender_f)         if 'Gender'       in df_all.columns else True) &
-        (df_all['Age'].between(age_f[0], age_f[1]) if 'Age'        in df_all.columns else True)
-    ]
+    df = df_all.copy()
+    if 'Loan_Purpose' in df_all.columns:
+        df = df[df['Loan_Purpose'].isin(purpose_f)]
+    if 'Gender' in df_all.columns:
+        df = df[df['Gender'].isin(gender_f)]
+    if 'Age' in df_all.columns:
+        df = df[df['Age'].between(age_f[0], age_f[1])]
+
     st.markdown("---")
     st.info("Risk assessment fully calibrated to Applicant Income, Debt obligations, and Credit Score.")
 
@@ -528,6 +467,8 @@ with tab1:
             fig2.update_layout(margin=dict(t=10, b=10), height=300, showlegend=False)
             st.plotly_chart(fig2, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.warning("No data matches the current sidebar filters.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 2 — PREDICT LOAN
@@ -563,7 +504,6 @@ with tab2:
 
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # ── Derived affordability metrics (computed inside form from current values) ─
         new_loan_emi         = calculate_emi(loan_amt_i, interest_rate_i, loan_term_i)
         total_monthly_income = income_i + co_income_i
         total_obligations    = new_loan_emi + existing_debt_i
@@ -581,10 +521,7 @@ with tab2:
 
         submitted = st.form_submit_button("⚡ Run AI Loan Validation", type="primary", use_container_width=True)
 
-    # ── Everything below only runs when the form is submitted ─────────────────
     if submitted:
-
-        # ── Scorecard factors ──────────────────────────────────────────────────
         if credit_score_i >= 750:
             score_status, score_reason = "pass", "Excellent Credit Worthiness"
         elif credit_score_i >= 650:
@@ -632,10 +569,9 @@ with tab2:
             {"label": "Employment",             "value": employment_i,                 "status": emp_status,   "reason": emp_reason},
         ]
 
-        risk_score  = min(sum({"fail": 25, "warn": 8, "pass": 0}[f["status"]] for f in factors), 100)
+        risk_score   = min(sum({"fail": 25, "warn": 8, "pass": 0}[f["status"]] for f in factors), 100)
         fail_factors = [f for f in factors if f["status"] == "fail"]
 
-        # ── ML model prediction (cached — same inputs = instant) ───────────────
         with st.spinner("Running AI model…"):
             prediction, prob_0, prob_1 = run_prediction(
                 income_i, co_income_i, age_i, dependents_i, credit_score_i,
@@ -644,7 +580,6 @@ with tab2:
             )
         model_says_approve = prediction == 1
 
-        # ── Hard policy stops (override ML model) ──────────────────────────────
         hard_reject_reasons = get_hard_reject_reasons(
             credit_score_i, dti_calculated, disposable_after_emi,
             employment_i, collateral_i, loan_amt_i,
@@ -661,7 +596,6 @@ with tab2:
 
         conf_pct = min(99.5, max(50.0, conf_pct))
 
-        # ── Soft manual-review flags ───────────────────────────────────────────
         review_flags = []
         if total_monthly_income > 0 and savings_i > total_monthly_income * 60:
             review_flags.append(
@@ -674,7 +608,6 @@ with tab2:
                 "recommend manual verification"
             )
 
-        # ── Decision banner ────────────────────────────────────────────────────
         if approved:
             st.balloons()
             color_box, icon, title = "#f0fff4", "✓", "Loan Facility Approved"
@@ -738,30 +671,22 @@ with tab4:
 
     col1, col2, col3 = st.columns(3, gap="medium")
 
-    # ── Column 1: Template Download ────────────────────────────────────────────
     with col1:
         st.markdown('<div class="card-container"><div class="card-header">📂 1. Structure Blueprint</div>', unsafe_allow_html=True)
-        tpl_data = pd.DataFrame([{
-            'Applicant_Income': 75000, 'Coapplicant_Income': 25000, 'Age': 35,
-            'Dependents': 2, 'Credit_Score': 720, 'Existing_Loans': 0,
-            'DTI_Ratio': 0.35, 'Savings': 200000, 'Collateral_Value': 600000,
-            'Loan_Amount': 500000, 'Loan_Term': 180,
-        }])
         tpl_type = st.selectbox("Select Structure Format", ["CSV", "JSON", "SQL"], key="tpl_v16_loan")
 
         if tpl_type == "CSV":
-            st.download_button("📥 Structure Blueprint (CSV)",  tpl_data.to_csv(index=False),                       "loan_template.csv",  use_container_width=True)
+            st.download_button("📥 Structure Blueprint (CSV)",  tpl_data.to_csv(index=False),                 "loan_template.csv",  use_container_width=True)
         elif tpl_type == "JSON":
-            st.download_button("📥 Structure Blueprint (JSON)", tpl_data.to_json(orient="records", indent=4),       "loan_template.json", use_container_width=True)
+            st.download_button("📥 Structure Blueprint (JSON)", tpl_data.to_json(orient="records", indent=4), "loan_template.json", use_container_width=True)
         else:
             sql_txt = f"INSERT INTO pipeline_loan VALUES {tuple(tpl_data.iloc[0].values)};"
-            st.download_button("📥 Structure Blueprint (SQL)",  sql_txt,                                             "loan_template.sql",  use_container_width=True)
+            st.download_button("📥 Structure Blueprint (SQL)",  sql_txt,                                       "loan_template.sql",  use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Column 2: File Upload & Run ────────────────────────────────────────────
     with col2:
         st.markdown('<div class="card-container"><div class="card-header">🔍 2. Ingestion Gateway</div>', unsafe_allow_html=True)
-        upload_mode   = st.radio("Pipeline Source", ["Local Upload", "Cloud Vault"], horizontal=True, key="scan_mode_loan")
+        upload_mode    = st.radio("Pipeline Source", ["Local Upload", "Cloud Vault"], horizontal=True, key="scan_mode_loan")
         raw_input_data = None
 
         if upload_mode == "Local Upload":
@@ -805,7 +730,6 @@ with tab4:
 
             res_final = original_display.copy()
 
-            # Batch-level risk overrides
             calc_installment  = res_final['Loan_Amount'] / res_final['Loan_Term']
             calc_income_total = res_final['Applicant_Income'] + res_final['Coapplicant_Income']
             batch_override_mask = (
@@ -829,7 +753,6 @@ with tab4:
             st.toast("Pipeline Evaluation Complete!")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Column 3: Export ────────────────────────────────────────────────────────
     with col3:
         st.markdown('<div class="card-container"><div class="card-header">📊 3. Dispatch Target</div>', unsafe_allow_html=True)
         if st.session_state.scan_done:
@@ -845,7 +768,7 @@ with tab4:
             st.button("🔒 Interface Enclosed", disabled=True, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-# ── Audit Logs (shown below all tabs when scan is done) ───────────────────────
+# ── Audit Logs ────────────────────────────────────────────────────────────────
 if st.session_state.scan_done:
     st.markdown("---")
     st.markdown("### 🎯 Audit Pipeline Logs (Granular Analytical View)")
