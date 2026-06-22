@@ -430,9 +430,9 @@ df_all = load_data(DATA_PATH)
 
 
 
-st.write("DATA LOADED")
-st.write("Rows:", len(df_all))
-st.write("Columns:", len(df_all.columns))
+# st.write("DATA LOADED")
+# st.write("Rows:", len(df_all))
+# st.write("Columns:", len(df_all.columns))
 
 st.stop()
 
