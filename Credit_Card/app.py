@@ -428,11 +428,19 @@ def load_data(path: str) -> pd.DataFrame:
 
 df_all = load_data(DATA_PATH)
 
+# model, scaler = load_assets()
+
+# numeric_df = df_all.select_dtypes(include=['int32', 'int64', 'float32', 'float64'])
+# FEATURES = [c for c in numeric_df.columns if c not in ['Loan_Approved', 'Applicant_ID']]
+
+if len(df_all) > 1000:
+    df_dashboard = df_all.head(1000)
+else:
+    df_dashboard = df_all.copy()
+
 model, scaler = load_assets()
 
 numeric_df = df_all.select_dtypes(include=['int32', 'int64', 'float32', 'float64'])
-FEATURES = [c for c in numeric_df.columns if c not in ['Loan_Approved', 'Applicant_ID']]
-
 # ── Sidebar Filters ───────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 💰 Loan Approval AI")
@@ -849,4 +857,3 @@ if st.session_state.scan_done:
         )
     except Exception:
         st.dataframe(display_df, use_container_width=True, height=550)
-        
