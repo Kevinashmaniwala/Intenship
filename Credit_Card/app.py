@@ -428,6 +428,15 @@ def load_data(path: str) -> pd.DataFrame:
 
 df_all = load_data(DATA_PATH)
 
+
+
+st.write("DATA LOADED")
+st.write("Rows:", len(df_all))
+st.write("Columns:", len(df_all.columns))
+
+st.stop()
+
+model, scaler = load_assets()
 # model, scaler = load_assets()
 
 # numeric_df = df_all.select_dtypes(include=['int32', 'int64', 'float32', 'float64'])
