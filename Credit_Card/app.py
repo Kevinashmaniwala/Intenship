@@ -397,8 +397,21 @@ def run_prediction(
     confidence_scores = _model_ref.predict_proba(scaled_inp)[0]
     return int(prediction), float(confidence_scores[0] * 100), float(confidence_scores[1] * 100)
 
-def _normalise(data):
-    """Normalise Loan_Approved labels and downcast dtypes."""
+@st.cache_data(show_spinner="Loading dataset…")
+def load_data(path: str) -> pd.DataFrame:
+    """Read and normalise the loan CSV once; cached across reruns."""
+    if not os.path.exists(path):
+        return pd.DataFrame([{
+            'Applicant_ID': 1001, 'Applicant_Income': 65000, 'Coapplicant_Income': 20000,
+            'Employment_Status': 'Employed', 'Age': 35, 'Marital_Status': 'Married',
+            'Dependents': 2, 'Credit_Score': 720, 'Existing_Loans': 1, 'DTI_Ratio': 0.35,
+            'Savings': 150000, 'Collateral_Value': 500000, 'Loan_Amount': 300000,
+            'Loan_Term': 180, 'Loan_Purpose': 'Home', 'Property_Area': 'Urban',
+            'Education_Level': 'Graduate', 'Gender': 'Male', 'Employer_Category': 'Corporate',
+            'Loan_Approved': 'Approved',
+        }])
+
+    data = pd.read_csv(path)
     if 'Loan_Approved' in data.columns:
         data['Loan_Approved'] = data['Loan_Approved'].astype(str).str.strip().str.lower()
         data['Loan_Approved'] = data['Loan_Approved'].replace({
@@ -413,54 +426,7 @@ def _normalise(data):
     data[int_cols]   = data[int_cols].astype('int32')
     return data
 
-def _dummy_df():
-    """Single-row fallback when no data source is available."""
-    return pd.DataFrame([{
-        'Applicant_ID': 1001, 'Applicant_Income': 65000, 'Coapplicant_Income': 20000,
-        'Employment_Status': 'Employed', 'Age': 35, 'Marital_Status': 'Married',
-        'Dependents': 2, 'Credit_Score': 720, 'Existing_Loans': 1, 'DTI_Ratio': 0.35,
-        'Savings': 150000, 'Collateral_Value': 500000, 'Loan_Amount': 300000,
-        'Loan_Term': 180, 'Loan_Purpose': 'Home', 'Property_Area': 'Urban',
-        'Education_Level': 'Graduate', 'Gender': 'Male', 'Employer_Category': 'Corporate',
-        'Loan_Approved': 'Approved',
-    }])
-
-@st.cache_data(show_spinner="Loading dataset...")
-def load_data(csv_path, gdrive_id):
-    """
-    Smart loader - works in three environments:
-    1. LOCAL DEV        : reads CSV directly from disk
-    2. STREAMLIT CLOUD  : downloads from Google Drive via gdown (needs GDRIVE_FILE_ID secret)
-    3. FALLBACK         : returns 1-row dummy with a warning
-    """
-    # Priority 1: local file exists (developer machine / local run)
-    if os.path.exists(csv_path):
-        return _normalise(pd.read_csv(csv_path))
-
-    # Priority 2: Google Drive secret configured (Streamlit Cloud)
-    if gdrive_id:
-        try:
-            import gdown
-            tmp_path = "/tmp/loan_clean_data.csv"
-            if not os.path.exists(tmp_path):   # skip re-download if already cached
-                url = f"https://drive.google.com/uc?id={gdrive_id}"
-                gdown.download(url, tmp_path, quiet=True)
-            return _normalise(pd.read_csv(tmp_path))
-        except Exception as e:
-            st.sidebar.error(f"Google Drive download failed: {e}")
-            return _dummy_df()
-
-    # Priority 3: nothing available
-    st.sidebar.warning(
-        "Dataset not found.\n\n"
-        "LOCAL: Place loan_clean_data.csv next to app.py\n\n"
-        "STREAMLIT CLOUD: Add GDRIVE_FILE_ID in Settings -> Secrets"
-    )
-    return _dummy_df()
-
-# Read secret (empty string if running locally without secrets file)
-_gdrive_id = st.secrets.get("GDRIVE_FILE_ID", "") if hasattr(st, "secrets") else ""
-df_all = load_data(CSV_PATH, _gdrive_id)
+df_all = load_data(CSV_PATH)
 
 model, scaler = load_assets()
 
@@ -531,7 +497,7 @@ with tab1:
                 color_discrete_map={'Approved': GREEN, 'Rejected': RED},
             )
             fig.update_layout(margin=dict(t=10, b=10), height=300)
-            st.plotly_chart(fig, width='stretch')
+            st.plotly_chart(fig, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
         with c2:
@@ -543,7 +509,7 @@ with tab1:
                 color_discrete_map={'Approved': GREEN, 'Rejected': RED},
             )
             fig2.update_layout(margin=dict(t=10, b=10), height=300, showlegend=False)
-            st.plotly_chart(fig2, width='stretch')
+            st.plotly_chart(fig2, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -596,7 +562,7 @@ with tab2:
         m4.metric("Disposable Income after Dependents & EMI", f"₹{disposable_after_emi:,.0f}")
         st.markdown('</div>', unsafe_allow_html=True)
 
-        submitted = st.form_submit_button("⚡ Run AI Loan Validation", type="primary")
+        submitted = st.form_submit_button("⚡ Run AI Loan Validation", type="primary", use_container_width=True)
 
     # ── Everything below only runs when the form is submitted ─────────────────
     if submitted:
@@ -767,12 +733,12 @@ with tab4:
         tpl_type = st.selectbox("Select Structure Format", ["CSV", "JSON", "SQL"], key="tpl_v16_loan")
 
         if tpl_type == "CSV":
-            st.download_button("📥 Structure Blueprint (CSV)",  tpl_data.to_csv(index=False),                       "loan_template.csv")
+            st.download_button("📥 Structure Blueprint (CSV)",  tpl_data.to_csv(index=False),                       "loan_template.csv",  use_container_width=True)
         elif tpl_type == "JSON":
-            st.download_button("📥 Structure Blueprint (JSON)", tpl_data.to_json(orient="records", indent=4), "loan_template.json")
+            st.download_button("📥 Structure Blueprint (JSON)", tpl_data.to_json(orient="records", indent=4),       "loan_template.json", use_container_width=True)
         else:
             sql_txt = f"INSERT INTO pipeline_loan VALUES {tuple(tpl_data.iloc[0].values)};"
-            st.download_button("📥 Structure Blueprint (SQL)",  sql_txt,                                             "loan_template.sql")
+            st.download_button("📥 Structure Blueprint (SQL)",  sql_txt,                                             "loan_template.sql",  use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Column 2: File Upload & Run ────────────────────────────────────────────
@@ -805,7 +771,7 @@ with tab4:
                 except Exception:
                     st.error("Vault Authentication Failed.")
 
-        if raw_input_data is not None and st.button("🚀 INITIATE AI PIPELINE RUN", type="primary"):
+        if raw_input_data is not None and st.button("🚀 INITIATE AI PIPELINE RUN", type="primary", use_container_width=True):
             original_display = raw_input_data.copy()
             predict_hidden   = pd.get_dummies(original_display)
             predict_hidden   = predict_hidden.loc[:, ~predict_hidden.columns.duplicated()].copy()
@@ -852,14 +818,14 @@ with tab4:
         if st.session_state.scan_done:
             exp_fmt = st.selectbox("Dispatch Format", ["CSV", "JSON", "SQL"], key="exp_loan")
             if exp_fmt == "CSV":
-                st.download_button("💾 Export CSV Logs",    st.session_state.result_df.to_csv(index=False),                         "loan_report.csv")
+                st.download_button("💾 Export CSV Logs",    st.session_state.result_df.to_csv(index=False),                         "loan_report.csv",  use_container_width=True)
             elif exp_fmt == "JSON":
-                st.download_button("💾 Export JSON Schema", st.session_state.result_df.to_json(orient="records", indent=4), "loan_report.json")
+                st.download_button("💾 Export JSON Schema", st.session_state.result_df.to_json(orient="records", indent=4),         "loan_report.json", use_container_width=True)
             else:
                 sql_out = f"INSERT INTO loan_predictions VALUES {str([tuple(x) for x in st.session_state.result_df.head(1000).values])};"
-                st.download_button("💾 Export SQL (Top 1k rows)", sql_out,                                                          "loan_report.sql")
+                st.download_button("💾 Export SQL (Top 1k rows)", sql_out,                                                          "loan_report.sql",  use_container_width=True)
         else:
-            st.button("🔒 Interface Enclosed", disabled=True)
+            st.button("🔒 Interface Enclosed", disabled=True, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ── Audit Logs (shown below all tabs when scan is done) ───────────────────────
@@ -878,8 +844,9 @@ if st.session_state.scan_done:
     try:
         st.dataframe(
             display_df.style.background_gradient(subset=['Trust_Score'], cmap='RdYlGn'),
+            use_container_width=True,
             height=550,
         )
     except Exception:
-        st.dataframe(display_df, height=550)
+        st.dataframe(display_df, use_container_width=True, height=550)
         
