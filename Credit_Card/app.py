@@ -15,12 +15,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Session state — initialise ALL keys here before anything else ─────────────
+# ── Session state initialisation ──────────────────────────────────────────────
 for _k, _v in {
-    "scan_done":      False,
-    "result_df":      None,
-    "uploaded_df":    None,   # ← stores uploaded file across reruns
-    "upload_error":   None,
+    "scan_done":   False,
+    "result_df":   None,
 }.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
@@ -122,7 +120,8 @@ base_path  = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH  = os.path.join(base_path, "loan_clean_data.parquet")
 MODEL_PKL  = os.path.join(base_path, "loan_model.pkl")
 SCALER_PKL = os.path.join(base_path, "loan_scaler.pkl")
-GREEN, RED = "#38a169", "#e53e3e"
+GREEN, RED, AMBER = "#38a169", "#e53e3e", "#d69e2e"
+BLUE_PALETTE = ["#2b6cb0", "#3182ce", "#4299e1", "#63b3ed", "#90cdf4", "#bee3f8"]
 DEPENDENT_MONTHLY_COST = 5000
 
 REQUIRED_COLUMNS = [
@@ -156,35 +155,6 @@ def get_hard_reject_reasons(credit_score, dti, disposable_after_emi,
     if loan_amt > 0 and collateral < loan_amt * 0.50:
         reasons.append(f"Collateral (₹{collateral:,.0f}) < 50% of loan (₹{loan_amt:,.0f})")
     return reasons
-
-
-def parse_uploaded_file(uploaded_file, file_format: str):
-    """
-    Read an uploaded file into a DataFrame.
-    Returns (df, error_message). On success error_message is None.
-    """
-    try:
-        uploaded_file.seek(0)
-        if file_format == "CSV":
-            df = pd.read_csv(uploaded_file)
-        elif file_format == "JSON":
-            df = pd.read_json(uploaded_file)
-        else:
-            return None, "SQL upload not supported for direct parsing — using template data instead."
-
-        if df.empty:
-            return None, "Uploaded file is empty."
-
-        missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
-        if missing:
-            return None, (
-                f"File is missing required columns: **{', '.join(missing)}**\n\n"
-                "Download the template from column 1 to see the correct format."
-            )
-        return df, None
-
-    except Exception as e:
-        return None, f"Could not read file: {str(e)}"
 
 
 # ── Mock fallback classes ─────────────────────────────────────────────────────
@@ -221,16 +191,47 @@ def load_assets():
 @st.cache_data(show_spinner="Loading dataset…")
 def load_data(path: str) -> pd.DataFrame:
     if not os.path.exists(path):
-        return pd.DataFrame([{
-            'Applicant_ID': 1001, 'Applicant_Income': 65000,
-            'Coapplicant_Income': 20000, 'Employment_Status': 'Employed',
-            'Age': 35, 'Marital_Status': 'Married', 'Dependents': 2,
-            'Credit_Score': 720, 'Existing_Loans': 1, 'DTI_Ratio': 0.35,
-            'Savings': 150000, 'Collateral_Value': 500000, 'Loan_Amount': 300000,
-            'Loan_Term': 180, 'Loan_Purpose': 'Home', 'Property_Area': 'Urban',
-            'Education_Level': 'Graduate', 'Gender': 'Male',
-            'Employer_Category': 'Corporate', 'Loan_Approved': 'Approved',
-        }])
+        # ── Synthetic fallback dataset (600 rows) for demo/dev ────────────────
+        np.random.seed(42)
+        n = 600
+        purposes    = ['Home', 'Personal', 'Education', 'Business']
+        areas       = ['Urban', 'Semiurban', 'Rural']
+        genders     = ['Male', 'Female']
+        educations  = ['Graduate', 'Not Graduate']
+        emp_cats    = ['Corporate', 'Government', 'Self-Employed']
+        emp_status  = ['Employed', 'Self-Employed', 'Unemployed']
+        marital     = ['Married', 'Single']
+
+        df_fake = pd.DataFrame({
+            'Applicant_ID':       np.arange(1001, 1001 + n),
+            'Applicant_Income':   np.random.randint(20000, 200000, n),
+            'Coapplicant_Income': np.random.randint(0, 80000, n),
+            'Employment_Status':  np.random.choice(emp_status, n, p=[0.70, 0.25, 0.05]),
+            'Age':                np.random.randint(22, 65, n),
+            'Marital_Status':     np.random.choice(marital, n),
+            'Dependents':         np.random.choice([0,1,2,3,4], n, p=[0.25,0.30,0.25,0.15,0.05]),
+            'Credit_Score':       np.random.randint(450, 900, n),
+            'Existing_Loans':     np.random.choice([0,1,2,3], n, p=[0.50,0.30,0.15,0.05]),
+            'DTI_Ratio':          np.round(np.random.uniform(0.10, 0.70, n), 2),
+            'Savings':            np.random.randint(10000, 1000000, n),
+            'Collateral_Value':   np.random.randint(100000, 5000000, n),
+            'Loan_Amount':        np.random.randint(50000, 3000000, n),
+            'Loan_Term':          np.random.choice([12,36,60,120,180,240,360], n),
+            'Loan_Purpose':       np.random.choice(purposes, n, p=[0.40,0.25,0.20,0.15]),
+            'Property_Area':      np.random.choice(areas, n),
+            'Education_Level':    np.random.choice(educations, n, p=[0.65,0.35]),
+            'Gender':             np.random.choice(genders, n, p=[0.65,0.35]),
+            'Employer_Category':  np.random.choice(emp_cats, n),
+        })
+        # Derive approval label heuristically
+        score = (
+            (df_fake['Credit_Score'] > 650).astype(int) * 2 +
+            (df_fake['DTI_Ratio'] < 0.45).astype(int) +
+            (df_fake['Collateral_Value'] > df_fake['Loan_Amount']).astype(int)
+        )
+        df_fake['Loan_Approved'] = np.where(score >= 3, 'Approved', 'Rejected')
+        return df_fake
+
     data = pd.read_parquet(path)
     if 'Loan_Approved' in data.columns:
         data['Loan_Approved'] = data['Loan_Approved'].astype(str).str.strip().str.lower()
@@ -287,13 +288,6 @@ if is_mock:
 numeric_df = df_all.select_dtypes(include=['int32','int64','float32','float64'])
 FEATURES   = [c for c in numeric_df.columns if c not in ['Loan_Approved','Applicant_ID']]
 
-tpl_data = pd.DataFrame([{
-    'Applicant_Income': 75000, 'Coapplicant_Income': 25000, 'Age': 35,
-    'Dependents': 2, 'Credit_Score': 720, 'Existing_Loans': 0,
-    'DTI_Ratio': 0.35, 'Savings': 200000, 'Collateral_Value': 600000,
-    'Loan_Amount': 500000, 'Loan_Term': 180,
-}])
-
 # ── Sidebar filters ───────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 💰 Loan Approval AI")
@@ -322,7 +316,8 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-tab1, tab2, tab4 = st.tabs(["📊 Dashboard", "🔍 Predict Loan", "📂 Bulk Scanner"])
+# ── Three main tabs — Bulk Scanner replaced with Charts & Analytics ───────────
+tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "🔍 Predict Loan", "📈 Charts & Analytics"])
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — DASHBOARD
@@ -483,179 +478,354 @@ with tab2:
             for r in review_flags: st.write(f"- {r}")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — BULK SCANNER  (file persisted in session_state)
+# TAB 3 — CHARTS & ANALYTICS  (replaces the old Bulk Scanner tab)
+# NOTE: All bulk-scanner logic (file upload, pipeline runner, session state for
+#       uploaded_df / scan_done / result_df, parse_uploaded_file, template
+#       download, export, audit-log section) has been removed. This tab now
+#       provides a multi-chart analytical view over the dataset, respecting the
+#       sidebar filters already applied to `df`.
 # ══════════════════════════════════════════════════════════════════════════════
-with tab4:
+with tab3:
     st.markdown("<br>", unsafe_allow_html=True)
-    st.subheader("🎯 Enterprise Batch Processing Intelligence Engine")
 
-    col1, col2, col3 = st.columns(3, gap="medium")
+    if df.empty or 'Loan_Approved' not in df.columns:
+        st.warning("No data matches the current sidebar filters. Adjust the filters to see charts.")
+        st.stop()
 
-    # ── Column 1: Template download ───────────────────────────────────────────
-    with col1:
-        st.markdown('<div class="card-container"><div class="card-header">📂 1. Download Template</div>', unsafe_allow_html=True)
-        tpl_type = st.selectbox("Format", ["CSV", "JSON"], key="tpl_fmt")
-        if tpl_type == "CSV":
-            st.download_button("📥 Download CSV Template", tpl_data.to_csv(index=False),
-                               "loan_template.csv", mime="text/csv", use_container_width=True)
-        else:
-            st.download_button("📥 Download JSON Template",
-                               tpl_data.to_json(orient="records", indent=4),
-                               "loan_template.json", mime="application/json", use_container_width=True)
+    # ── Top KPI strip ─────────────────────────────────────────────────────────
+    approved_df = df[df['Loan_Approved'] == 'Approved']
+    rejected_df = df[df['Loan_Approved'] == 'Rejected']
+    approval_rate = len(approved_df) / len(df) * 100 if len(df) > 0 else 0
+    avg_loan = df['Loan_Amount'].mean() if 'Loan_Amount' in df.columns else 0
+    avg_credit = df['Credit_Score'].mean() if 'Credit_Score' in df.columns else 0
+    avg_dti = df['DTI_Ratio'].mean() * 100 if 'DTI_Ratio' in df.columns else 0
 
-        st.markdown("**Required columns:**")
-        for c in REQUIRED_COLUMNS:
-            st.markdown(f"- `{c}`")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    # ── Column 2: Upload & Run ────────────────────────────────────────────────
-    with col2:
-        st.markdown('<div class="card-container"><div class="card-header">🔍 2. Upload & Process</div>', unsafe_allow_html=True)
-
-        file_format = st.selectbox("File Format", ["CSV", "JSON"], key="bulk_file_fmt")
-
-        # File uploader — key changes when format changes to force reset
-        up_f = st.file_uploader(
-            f"Upload {file_format} file",
-            type=["csv"] if file_format == "CSV" else ["json"],
-            key=f"uploader_{file_format}",
-        )
-
-        # ── Parse file the moment it's uploaded & store in session_state ──────
-        if up_f is not None:
-            parsed_df, parse_error = parse_uploaded_file(up_f, file_format)
-            if parse_error:
-                st.session_state.upload_error  = parse_error
-                st.session_state.uploaded_df   = None
-            else:
-                st.session_state.uploaded_df   = parsed_df
-                st.session_state.upload_error  = None
-
-        # Show any parse errors
-        if st.session_state.upload_error:
-            st.error(f"❌ {st.session_state.upload_error}")
-
-        # Show preview and Run button if data is loaded
-        if st.session_state.uploaded_df is not None:
-            udf = st.session_state.uploaded_df
-            st.success(f"✅ File loaded — {len(udf):,} rows × {len(udf.columns)} columns")
-            st.dataframe(udf.head(5), use_container_width=True)
-
-            if st.button("🚀 Run AI Pipeline", type="primary", use_container_width=True, key="run_pipeline"):
-                with st.spinner(f"Processing {len(udf):,} applications…"):
-                    try:
-                        original_display = udf.copy()
-
-                        # Build feature matrix
-                        predict_input = original_display[REQUIRED_COLUMNS].copy().fillna(0)
-
-                        try:
-                            m_feat = list(scaler.feature_names_in_)
-                        except AttributeError:
-                            m_feat = REQUIRED_COLUMNS
-
-                        predict_input = predict_input.reindex(columns=m_feat, fill_value=0)
-                        scaled_matrix = scaler.transform(predict_input)
-                        preds         = model.predict(scaled_matrix)
-                        probs         = model.predict_proba(scaled_matrix)
-
-                        res_final = original_display.copy()
-
-                        # Hard policy overrides
-                        override_mask = pd.Series([False] * len(res_final), index=res_final.index)
-                        if 'Loan_Amount' in res_final.columns and 'Loan_Term' in res_final.columns:
-                            calc_install      = res_final['Loan_Amount'] / res_final['Loan_Term'].replace(0, np.nan)
-                            calc_income_total = (res_final['Applicant_Income'] + res_final['Coapplicant_Income']).replace(0, np.nan)
-                            override_mask = (
-                                (calc_install / calc_income_total > 0.65) |
-                                (res_final['Credit_Score'] < 500) |
-                                (res_final['DTI_Ratio'] > 0.65)
-                            ).fillna(False)
-
-                        res_final['AI_Decision']   = np.where(preds == 1, "Approved", "Rejected")
-                        res_final.loc[override_mask, 'AI_Decision'] = "Rejected"
-                        res_final['AI_Confidence'] = np.round(np.max(probs, axis=1) * 100, 1)
-                        res_final['Trust_Score']   = np.where(
-                            res_final['AI_Decision'] == "Approved",
-                            np.random.uniform(88, 99, len(res_final)),
-                            np.random.uniform(10, 42, len(res_final)),
-                        )
-
-                        st.session_state.result_df = res_final
-                        st.session_state.scan_done = True
-                        st.toast("✅ Pipeline complete!", icon="🎯")
-
-                    except Exception as e:
-                        st.error(f"❌ Pipeline error: {str(e)}")
-
-        else:
-            st.info("👆 Upload a file above to begin.")
-
-        # Clear button
-        if st.session_state.uploaded_df is not None or st.session_state.scan_done:
-            if st.button("🗑️ Clear & Reset", key="clear_btn"):
-                st.session_state.uploaded_df  = None
-                st.session_state.upload_error = None
-                st.session_state.scan_done    = False
-                st.session_state.result_df    = None
-                st.rerun()
-
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    # ── Column 3: Export ──────────────────────────────────────────────────────
-    with col3:
-        st.markdown('<div class="card-container"><div class="card-header">📊 3. Export Results</div>', unsafe_allow_html=True)
-        if st.session_state.scan_done and st.session_state.result_df is not None:
-            exp_fmt = st.selectbox("Export Format", ["CSV", "JSON"], key="exp_fmt")
-            if exp_fmt == "CSV":
-                st.download_button(
-                    "💾 Download CSV Results",
-                    st.session_state.result_df.to_csv(index=False),
-                    "loan_results.csv", mime="text/csv", use_container_width=True,
-                )
-            else:
-                st.download_button(
-                    "💾 Download JSON Results",
-                    st.session_state.result_df.to_json(orient="records", indent=4),
-                    "loan_results.json", mime="application/json", use_container_width=True,
-                )
-        else:
-            st.info("Results will appear here after running the pipeline.")
-            st.button("🔒 Run pipeline first", disabled=True, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-# ── Audit Logs ────────────────────────────────────────────────────────────────
-if st.session_state.scan_done and st.session_state.result_df is not None:
-    st.markdown("---")
-    st.markdown("### 🎯 Audit Pipeline Results")
-
-    view_df  = st.session_state.result_df
-    approved = len(view_df[view_df['AI_Decision'] == "Approved"])
-    rejected = len(view_df[view_df['AI_Decision'] == "Rejected"])
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Processed",  f"{len(view_df):,}")
-    m2.metric("✅ Approved",       f"{approved:,}")
-    m3.metric("❌ Rejected",       f"{rejected:,}",  delta_color="inverse")
-    m4.metric("Avg Trust Score",  f"{view_df['Trust_Score'].mean():.1f}%")
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Approval Rate",       f"{approval_rate:.1f}%")
+    k2.metric("Avg Loan Amount",     f"₹{avg_loan:,.0f}")
+    k3.metric("Avg Credit Score",    f"{avg_credit:.0f}")
+    k4.metric("Avg DTI Ratio",       f"{avg_dti:.1f}%")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Approval pie
-    pie_col, tbl_col = st.columns([1, 2])
-    with pie_col:
-        fig_pie = px.pie(
-            values=[approved, rejected], names=["Approved", "Rejected"],
-            hole=0.5, color_discrete_sequence=[GREEN, RED],
-        )
-        fig_pie.update_layout(margin=dict(t=10, b=10), height=250)
-        st.plotly_chart(fig_pie, use_container_width=True)
+    # ══════════════════════════════════════════════════════════════════════════
+    # ROW 1 — Credit Score Distribution  |  Loan Purpose Breakdown
+    # ══════════════════════════════════════════════════════════════════════════
+    r1c1, r1c2 = st.columns(2)
 
-    with tbl_col:
-        try:
-            st.dataframe(
-                view_df.style.background_gradient(subset=['Trust_Score'], cmap='RdYlGn'),
-                use_container_width=True, height=300,
+    # ── Chart 1 : Credit Score Distribution by Approval Status ───────────────
+    with r1c1:
+        st.markdown('<div class="section-card"><div class="section-title">Credit Score Distribution</div>', unsafe_allow_html=True)
+        fig_hist = px.histogram(
+            df, x='Credit_Score', color='Loan_Approved', nbins=30,
+            barmode='overlay', opacity=0.75,
+            color_discrete_map={'Approved': GREEN, 'Rejected': RED},
+            labels={'Credit_Score': 'Credit Score', 'count': 'Applications'},
+        )
+        fig_hist.add_vline(x=650, line_dash="dash", line_color=AMBER,
+                           annotation_text="Min threshold (650)",
+                           annotation_position="top right")
+        fig_hist.update_layout(margin=dict(t=10, b=10), height=320,
+                               legend_title_text='Decision')
+        st.plotly_chart(fig_hist, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Chart 2 : Loan Purpose Breakdown (stacked bar) ────────────────────────
+    with r1c2:
+        st.markdown('<div class="section-card"><div class="section-title">Approval by Loan Purpose</div>', unsafe_allow_html=True)
+        if 'Loan_Purpose' in df.columns:
+            purpose_grp = (df.groupby(['Loan_Purpose', 'Loan_Approved'])
+                             .size().reset_index(name='Count'))
+            fig_bar = px.bar(
+                purpose_grp, x='Loan_Purpose', y='Count', color='Loan_Approved',
+                barmode='group', text_auto=True,
+                color_discrete_map={'Approved': GREEN, 'Rejected': RED},
+                labels={'Loan_Purpose': 'Purpose', 'Count': 'Applications'},
             )
-        except Exception:
-            st.dataframe(view_df, use_container_width=True, height=300)
+            fig_bar.update_layout(margin=dict(t=10, b=10), height=320,
+                                  legend_title_text='Decision')
+            st.plotly_chart(fig_bar, use_container_width=True)
+        else:
+            st.info("Loan_Purpose column not available in this dataset.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ROW 2 — Income vs Loan Amount Scatter  |  DTI Ratio Distribution
+    # ══════════════════════════════════════════════════════════════════════════
+    r2c1, r2c2 = st.columns(2)
+
+    # ── Chart 3 : Income vs Loan Amount scatter coloured by decision ──────────
+    with r2c1:
+        st.markdown('<div class="section-card"><div class="section-title">Income vs Loan Amount</div>', unsafe_allow_html=True)
+        scatter_df = df.sample(n=min(2000, len(df)), random_state=1)
+        fig_scatter = px.scatter(
+            scatter_df, x='Applicant_Income', y='Loan_Amount',
+            color='Loan_Approved', opacity=0.65, size_max=6,
+            color_discrete_map={'Approved': GREEN, 'Rejected': RED},
+            labels={'Applicant_Income': 'Monthly Income (₹)', 'Loan_Amount': 'Loan Amount (₹)'},
+            hover_data=['Credit_Score'] if 'Credit_Score' in scatter_df.columns else None,
+        )
+        fig_scatter.update_traces(marker=dict(size=5))
+        fig_scatter.update_layout(margin=dict(t=10, b=10), height=320,
+                                  legend_title_text='Decision')
+        st.plotly_chart(fig_scatter, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Chart 4 : DTI Ratio violin by Approval ────────────────────────────────
+    with r2c2:
+        st.markdown('<div class="section-card"><div class="section-title">DTI Ratio Distribution</div>', unsafe_allow_html=True)
+        fig_violin = px.violin(
+            df, x='Loan_Approved', y='DTI_Ratio', color='Loan_Approved',
+            box=True, points=False,
+            color_discrete_map={'Approved': GREEN, 'Rejected': RED},
+            labels={'DTI_Ratio': 'Debt-to-Income Ratio', 'Loan_Approved': 'Decision'},
+        )
+        fig_violin.add_hline(y=0.65, line_dash="dash", line_color=RED,
+                             annotation_text="Hard cap (65%)",
+                             annotation_position="top right")
+        fig_violin.add_hline(y=0.40, line_dash="dot", line_color=AMBER,
+                             annotation_text="Healthy ceiling (40%)",
+                             annotation_position="bottom right")
+        fig_violin.update_layout(margin=dict(t=10, b=10), height=320,
+                                 showlegend=False)
+        st.plotly_chart(fig_violin, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ROW 3 — Age Band Approval Rates  |  Gender & Marital Status Mix
+    # ══════════════════════════════════════════════════════════════════════════
+    r3c1, r3c2 = st.columns(2)
+
+    # ── Chart 5 : Approval rate by age band (line + bar combo) ───────────────
+    with r3c1:
+        st.markdown('<div class="section-card"><div class="section-title">Approval Rate by Age Group</div>', unsafe_allow_html=True)
+        if 'Age' in df.columns:
+            age_df = df.copy()
+            age_df['Age_Band'] = pd.cut(
+                age_df['Age'],
+                bins=[17, 25, 30, 35, 40, 50, 60, 80],
+                labels=['18-25','26-30','31-35','36-40','41-50','51-60','61+'],
+            )
+            age_grp = (age_df.groupby('Age_Band', observed=True)
+                             .apply(lambda x: pd.Series({
+                                 'Total': len(x),
+                                 'Approved': (x['Loan_Approved'] == 'Approved').sum(),
+                                 'Rate': (x['Loan_Approved'] == 'Approved').mean() * 100,
+                             }))
+                             .reset_index())
+            fig_age = go.Figure()
+            fig_age.add_trace(go.Bar(
+                x=age_grp['Age_Band'].astype(str), y=age_grp['Total'],
+                name='Total Applications', marker_color='#bee3f8', opacity=0.7,
+                yaxis='y',
+            ))
+            fig_age.add_trace(go.Scatter(
+                x=age_grp['Age_Band'].astype(str), y=age_grp['Rate'],
+                name='Approval Rate %', mode='lines+markers',
+                line=dict(color=GREEN, width=2.5),
+                marker=dict(size=8, color=GREEN),
+                yaxis='y2',
+            ))
+            fig_age.update_layout(
+                margin=dict(t=10, b=10), height=320,
+                yaxis=dict(title='Applications', showgrid=False),
+                yaxis2=dict(title='Approval Rate (%)', overlaying='y',
+                            side='right', range=[0, 110], showgrid=False),
+                legend=dict(orientation='h', yanchor='bottom', y=1.01, xanchor='left', x=0),
+            )
+            st.plotly_chart(fig_age, use_container_width=True)
+        else:
+            st.info("Age column not available.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Chart 6 : Sunburst — Gender → Employment → Decision ──────────────────
+    with r3c2:
+        st.markdown('<div class="section-card"><div class="section-title">Gender × Employment × Decision</div>', unsafe_allow_html=True)
+        sun_cols = [c for c in ['Gender', 'Employment_Status', 'Loan_Approved'] if c in df.columns]
+        if len(sun_cols) == 3:
+            sun_df = (df.groupby(sun_cols).size().reset_index(name='Count'))
+            fig_sun = px.sunburst(
+                sun_df, path=sun_cols, values='Count',
+                color='Loan_Approved',
+                color_discrete_map={'Approved': GREEN, 'Rejected': RED, '(?)': '#a0aec0'},
+            )
+            fig_sun.update_layout(margin=dict(t=10, b=10), height=320)
+            st.plotly_chart(fig_sun, use_container_width=True)
+        else:
+            st.info("Gender / Employment_Status columns not available.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ROW 4 — Loan Term Mix  |  Savings vs Collateral bubble
+    # ══════════════════════════════════════════════════════════════════════════
+    r4c1, r4c2 = st.columns(2)
+
+    # ── Chart 7 : Approval rate by Loan Term (horizontal bar) ────────────────
+    with r4c1:
+        st.markdown('<div class="section-card"><div class="section-title">Approval Rate by Loan Term</div>', unsafe_allow_html=True)
+        if 'Loan_Term' in df.columns:
+            term_grp = (df.groupby('Loan_Term')
+                          .apply(lambda x: pd.Series({
+                              'Count': len(x),
+                              'ApprovalRate': (x['Loan_Approved'] == 'Approved').mean() * 100,
+                          }))
+                          .reset_index()
+                          .sort_values('Loan_Term'))
+            fig_term = px.bar(
+                term_grp, y=term_grp['Loan_Term'].astype(str),
+                x='ApprovalRate', orientation='h',
+                text=term_grp['ApprovalRate'].round(1).astype(str) + '%',
+                color='ApprovalRate',
+                color_continuous_scale=[[0, RED], [0.5, AMBER], [1, GREEN]],
+                labels={'ApprovalRate': 'Approval Rate (%)',
+                        'y': 'Term (Months)'},
+            )
+            fig_term.update_traces(textposition='outside')
+            fig_term.update_layout(margin=dict(t=10, b=10), height=320,
+                                   coloraxis_showscale=False,
+                                   xaxis=dict(range=[0, 115]))
+            st.plotly_chart(fig_term, use_container_width=True)
+        else:
+            st.info("Loan_Term column not available.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Chart 8 : Savings vs Collateral bubble sized by Loan Amount ──────────
+    with r4c2:
+        st.markdown('<div class="section-card"><div class="section-title">Savings vs Collateral (bubble = Loan)</div>', unsafe_allow_html=True)
+        bub_cols = ['Savings', 'Collateral_Value', 'Loan_Amount', 'Loan_Approved']
+        if all(c in df.columns for c in bub_cols):
+            bub_df = df[bub_cols].dropna().sample(n=min(800, len(df)), random_state=7)
+            fig_bub = px.scatter(
+                bub_df, x='Savings', y='Collateral_Value',
+                size='Loan_Amount', color='Loan_Approved',
+                color_discrete_map={'Approved': GREEN, 'Rejected': RED},
+                opacity=0.65, size_max=25,
+                labels={
+                    'Savings': 'Savings Balance (₹)',
+                    'Collateral_Value': 'Collateral Value (₹)',
+                    'Loan_Amount': 'Loan Amount (₹)',
+                },
+            )
+            fig_bub.update_layout(margin=dict(t=10, b=10), height=320,
+                                  legend_title_text='Decision')
+            st.plotly_chart(fig_bub, use_container_width=True)
+        else:
+            st.info("Required columns not available.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ROW 5 — Correlation Heatmap  |  Property Area treemap
+    # ══════════════════════════════════════════════════════════════════════════
+    r5c1, r5c2 = st.columns([1.5, 1])
+
+    # ── Chart 9 : Correlation heatmap of numeric features ────────────────────
+    with r5c1:
+        st.markdown('<div class="section-card"><div class="section-title">Feature Correlation Matrix</div>', unsafe_allow_html=True)
+        heat_cols = [c for c in REQUIRED_COLUMNS if c in df.columns]
+        if len(heat_cols) >= 3:
+            corr = df[heat_cols].corr()
+            fig_heat = go.Figure(go.Heatmap(
+                z=corr.values,
+                x=corr.columns.tolist(),
+                y=corr.index.tolist(),
+                colorscale='RdBu',
+                zmin=-1, zmax=1,
+                text=np.round(corr.values, 2),
+                texttemplate='%{text}',
+                textfont=dict(size=9),
+                hovertemplate='%{x} × %{y}: %{z:.2f}<extra></extra>',
+            ))
+            fig_heat.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=360)
+            st.plotly_chart(fig_heat, use_container_width=True)
+        else:
+            st.info("Not enough numeric columns for a correlation matrix.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Chart 10 : Treemap — Property Area × Loan Purpose volume ─────────────
+    with r5c2:
+        st.markdown('<div class="section-card"><div class="section-title">Volume by Area & Purpose</div>', unsafe_allow_html=True)
+        tree_cols = [c for c in ['Property_Area', 'Loan_Purpose'] if c in df.columns]
+        if len(tree_cols) == 2:
+            tree_df = (df.groupby(tree_cols).size().reset_index(name='Count'))
+            fig_tree = px.treemap(
+                tree_df, path=tree_cols, values='Count',
+                color='Count', color_continuous_scale=BLUE_PALETTE,
+            )
+            fig_tree.update_layout(margin=dict(t=10, b=10), height=360,
+                                   coloraxis_showscale=False)
+            st.plotly_chart(fig_tree, use_container_width=True)
+        elif 'Property_Area' in df.columns:
+            area_df = df['Property_Area'].value_counts().reset_index()
+            area_df.columns = ['Area', 'Count']
+            fig_area = px.bar(area_df, x='Area', y='Count',
+                              color='Count', color_continuous_scale=BLUE_PALETTE,
+                              labels={'Area': 'Property Area'})
+            fig_area.update_layout(margin=dict(t=10, b=10), height=360,
+                                   coloraxis_showscale=False)
+            st.plotly_chart(fig_area, use_container_width=True)
+        else:
+            st.info("Property_Area or Loan_Purpose columns not available.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ROW 6 — Dependents impact  |  Education level approval
+    # ══════════════════════════════════════════════════════════════════════════
+    r6c1, r6c2 = st.columns(2)
+
+    # ── Chart 11 : Approval rate by number of dependents ─────────────────────
+    with r6c1:
+        st.markdown('<div class="section-card"><div class="section-title">Approval Rate by Dependents</div>', unsafe_allow_html=True)
+        if 'Dependents' in df.columns:
+            dep_grp = (df.groupby('Dependents')
+                         .apply(lambda x: pd.Series({
+                             'Total': len(x),
+                             'ApprovalRate': (x['Loan_Approved'] == 'Approved').mean() * 100,
+                         }))
+                         .reset_index())
+            fig_dep = go.Figure()
+            fig_dep.add_trace(go.Bar(
+                x=dep_grp['Dependents'].astype(str), y=dep_grp['Total'],
+                name='Total', marker_color='#bee3f8', opacity=0.7,
+            ))
+            fig_dep.add_trace(go.Scatter(
+                x=dep_grp['Dependents'].astype(str), y=dep_grp['ApprovalRate'],
+                name='Approval Rate %', mode='lines+markers',
+                line=dict(color=GREEN, width=2.5),
+                marker=dict(size=8, color=GREEN),
+                yaxis='y2',
+            ))
+            fig_dep.update_layout(
+                margin=dict(t=10, b=10), height=300,
+                xaxis=dict(title='Number of Dependents'),
+                yaxis=dict(title='Total Applications', showgrid=False),
+                yaxis2=dict(title='Approval Rate (%)', overlaying='y',
+                            side='right', range=[0, 110], showgrid=False),
+                legend=dict(orientation='h', yanchor='bottom', y=1.01, xanchor='left', x=0),
+            )
+            st.plotly_chart(fig_dep, use_container_width=True)
+        else:
+            st.info("Dependents column not available.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Chart 12 : Education level → approval stacked 100% bar ───────────────
+    with r6c2:
+        st.markdown('<div class="section-card"><div class="section-title">Approval by Education Level</div>', unsafe_allow_html=True)
+        if 'Education_Level' in df.columns:
+            edu_grp = (df.groupby(['Education_Level', 'Loan_Approved'])
+                         .size().reset_index(name='Count'))
+            edu_tot = edu_grp.groupby('Education_Level')['Count'].transform('sum')
+            edu_grp['Pct'] = edu_grp['Count'] / edu_tot * 100
+            fig_edu = px.bar(
+                edu_grp, x='Education_Level', y='Pct', color='Loan_Approved',
+                barmode='stack', text=edu_grp['Pct'].round(1).astype(str) + '%',
+                color_discrete_map={'Approved': GREEN, 'Rejected': RED},
+                labels={'Pct': '% Share', 'Education_Level': 'Education'},
+            )
+            fig_edu.update_traces(textposition='inside', textfont_size=11)
+            fig_edu.update_layout(margin=dict(t=10, b=10), height=300,
+                                  yaxis=dict(title='% of Applications', range=[0, 105]),
+                                  legend_title_text='Decision')
+            st.plotly_chart(fig_edu, use_container_width=True)
+        else:
+            st.info("Education_Level column not available.")
+        st.markdown('</div>', unsafe_allow_html=True)
