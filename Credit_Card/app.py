@@ -286,8 +286,8 @@ with st.sidebar:
     st.markdown("## 💰 Loan Approval AI")
     st.markdown("---")
 
-    if is_mock:
-        st.warning("⚠️ ML model not found — Simulation Mode.")
+    # if is_mock:
+    #     st.warning("⚠️ ML model not found — Simulation Mode.")
 
     purpose_list = (sorted(df_all['Loan_Purpose'].dropna().unique())
                     if 'Loan_Purpose' in df_all.columns else ['Home','Personal','Education','Business'])
