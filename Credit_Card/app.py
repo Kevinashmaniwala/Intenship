@@ -274,8 +274,8 @@ def run_prediction(income_i, co_income_i, age_i, dependents_i, credit_score_i,
 df_all = load_data(DATA_PATH)
 model, scaler, is_mock = load_assets()
 
-if is_mock:
-    st.sidebar.warning("⚠️ ML model not found — running in Simulation Mode.")
+# if is_mock:
+#     st.sidebar.warning("⚠️ ML model not found — running in Simulation Mode.")
 
 numeric_df = df_all.select_dtypes(include=['int32','int64','float32','float64'])
 FEATURES   = [c for c in numeric_df.columns if c not in ['Loan_Approved','Applicant_ID']]
