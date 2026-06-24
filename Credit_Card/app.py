@@ -319,8 +319,8 @@ with st.sidebar:
     st.markdown("## 💰 Loan Approval AI")
     st.markdown("---")
 
-    if is_mock:
-        st.warning("⚠️ ML model not found — Simulation Mode.")
+    # if is_mock:
+    #     st.warning("⚠️ ML model not found — Simulation Mode.")
 
     st.markdown("### 🔽 Global Filters")
 
