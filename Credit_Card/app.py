@@ -16,12 +16,12 @@ st.set_page_config(
 )
 
 # ── Session state initialisation ──────────────────────────────────────────────
-for _k, _v in {
-    "scan_done":   False,
-    "result_df":   None,
-}.items():
-    if _k not in st.session_state:
-        st.session_state[_k] = _v
+# for _k, _v in {
+#     "scan_done":   False,
+#     "result_df":   None,
+# }.items():
+#     if _k not in st.session_state:
+#         st.session_state[_k] = _v
 
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
