@@ -15,14 +15,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Session state initialisation ──────────────────────────────────────────────
-for _k, _v in {
-    "scan_done":   False,
-    "result_df":   None,
-}.items():
-    if _k not in st.session_state:
-        st.session_state[_k] = _v
-
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -282,8 +274,8 @@ def run_prediction(income_i, co_income_i, age_i, dependents_i, credit_score_i,
 df_all = load_data(DATA_PATH)
 model, scaler, is_mock = load_assets()
 
-# if is_mock:
-#     st.sidebar.warning("⚠️ ML model not found — running in Simulation Mode.")
+if is_mock:
+    st.sidebar.warning("⚠️ ML model not found — running in Simulation Mode.")
 
 numeric_df = df_all.select_dtypes(include=['int32','int64','float32','float64'])
 FEATURES   = [c for c in numeric_df.columns if c not in ['Loan_Approved','Applicant_ID']]
@@ -829,4 +821,3 @@ with tab3:
         else:
             st.info("Education_Level column not available.")
         st.markdown('</div>', unsafe_allow_html=True)
-        
