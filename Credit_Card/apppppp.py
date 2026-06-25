@@ -181,13 +181,88 @@ div[data-baseweb="tab"][aria-selected="true"] {
 # DATASET LOADER  — Multi-strategy with fallback
 # ══════════════════════════════════════════════
 
+def _extract_gdrive_id(url: str) -> str | None:
+    """Extract Google Drive file ID from any share/view/uc URL format."""
+    import re
+    patterns = [
+        r"/file/d/([a-zA-Z0-9_-]{25,})",   # /file/d/FILE_ID/view
+        r"id=([a-zA-Z0-9_-]{25,})",          # ?id=FILE_ID or &id=FILE_ID
+        r"/d/([a-zA-Z0-9_-]{25,})",          # /d/FILE_ID
+    ]
+    for pat in patterns:
+        m = re.search(pat, url)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _load_from_gdrive(url: str) -> pd.DataFrame | None:
+    """
+    Download a CSV from Google Drive, handling the large-file virus-scan
+    confirmation page that Google shows for files > ~10 MB.
+    Works for both /file/d/... share links and uc?export=download links.
+    """
+    session = requests.Session()
+
+    file_id = _extract_gdrive_id(url)
+    if not file_id:
+        # Not a Google Drive URL — try raw download directly
+        resp = session.get(url, timeout=120)
+        resp.raise_for_status()
+        return pd.read_csv(io.StringIO(resp.text))
+
+    # Step 1 — Hit the standard export endpoint
+    download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    resp = session.get(download_url, timeout=60)
+    resp.raise_for_status()
+
+    # Step 2 — Check if Google returned an HTML virus-scan warning page
+    content_type = resp.headers.get("Content-Type", "")
+    if "text/html" in content_type:
+        # Extract the confirmation token from the warning page
+        import re
+        # Modern Google Drive token (2023+)
+        token_match = re.search(r'name="uuid"\s+value="([^"]+)"', resp.text)
+        if not token_match:
+            # Older format
+            token_match = re.search(r'confirm=([0-9A-Za-z_-]+)', resp.text)
+
+        if token_match:
+            token = token_match.group(1)
+            # Try both old & new confirmation URL patterns
+            confirm_url = (
+                f"https://drive.usercontent.google.com/download"
+                f"?id={file_id}&export=download&confirm={token}"
+            )
+            resp = session.get(confirm_url, timeout=180)
+            resp.raise_for_status()
+        else:
+            # Fallback: drive.usercontent.google.com direct endpoint (works without token)
+            usercontent_url = (
+                f"https://drive.usercontent.google.com/download"
+                f"?id={file_id}&export=download&authuser=0"
+            )
+            resp = session.get(usercontent_url, timeout=180)
+            resp.raise_for_status()
+
+    # Step 3 — Parse the downloaded content as CSV
+    content_type = resp.headers.get("Content-Type", "")
+    if "text/html" in content_type:
+        raise ValueError(
+            "Google Drive returned an HTML page instead of CSV. "
+            "Make sure the file is shared as 'Anyone with the link' and the link is correct."
+        )
+
+    return pd.read_csv(io.BytesIO(resp.content))
+
+
 @st.cache_data(show_spinner=False)
 def load_data() -> pd.DataFrame | None:
     """
     Load dataset using a 3-tier strategy:
       1. Local CSV file          → fastest, works locally & on small repos
       2. Hugging Face Hub        → free, public, no size limit (set DATASET_HF_REPO)
-      3. Direct HTTPS URL        → Google Drive, Dropbox, etc. (set DATASET_URL)
+      3. Google Drive / URL      → handles large-file virus-scan bypass automatically
     Returns a DataFrame or None if all strategies fail.
     """
 
@@ -212,12 +287,10 @@ def load_data() -> pd.DataFrame | None:
         except Exception as e:
             st.warning(f"Hugging Face load failed: {e}")
 
-    # ── Strategy 3: Direct URL ──────────────────
+    # ── Strategy 3: Google Drive / Direct URL ───
     if DATASET_URL.strip():
         try:
-            resp = requests.get(DATASET_URL.strip(), timeout=120)
-            resp.raise_for_status()
-            df = pd.read_csv(io.StringIO(resp.text))
+            df = _load_from_gdrive(DATASET_URL.strip())
             return df
         except Exception as e:
             st.warning(f"URL download failed: {e}")
