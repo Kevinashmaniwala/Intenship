@@ -33,8 +33,12 @@ warnings.filterwarnings("ignore")
 # ──────────────────────────────────────────────
 # CONFIGURATION — edit these for your deployment
 # ──────────────────────────────────────────────
-MODEL_PATH = "loan_model.pkl"
-DATA_PATH  = "cleaned_loan_data.csv"
+
+# Paths are resolved relative to THIS script file so the app works correctly
+# on Streamlit Cloud even when deployed from a subfolder (e.g. Credit_Card/apppppp.py)
+_BASE      = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(_BASE, "loan_model.pkl")
+DATA_PATH  = os.path.join(_BASE, "cleaned_loan_data.csv")
 
 # Cloud fallback — fill one of these in st.secrets or leave blank to skip
 # Option A: Hugging Face  →  "your-username/your-dataset-repo"  (CSV must be named cleaned_loan_data.csv)
