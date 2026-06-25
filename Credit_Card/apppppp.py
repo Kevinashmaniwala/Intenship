@@ -7,14 +7,10 @@ Production-ready Streamlit application — 4 Tabs:
   3. Visualization   — Full EDA with auto-generated insights
   4. Insights        — Business insights & conclusions for stakeholders
 
-Dataset Loading Strategy (Streamlit Cloud):
-  Priority 1 → local file     (parquet or CSV — works locally & when committed to Git)
-  Priority 2 → Hugging Face Dataset Hub  (free, public, no size limit)
-  Priority 3 → Direct HTTPS URL          (Google Drive shareable, Dropbox, etc.)
-  Set DATASET_HF_REPO or DATASET_URL in st.secrets or environment variables.
-
-Author : [Your Name]
-Model  : Random Forest Classifier
+Dataset & Model Loading Strategy (Streamlit Cloud):
+  Priority 1 → local file     (parquet or CSV + pkl)
+  Priority 2 → Hugging Face Dataset Hub
+  Priority 3 → Google Drive / Direct URL  (set DATASET_URL and MODEL_URL in st.secrets)
 """
 
 import streamlit as st
@@ -23,6 +19,7 @@ import numpy as np
 import pickle
 import os
 import io
+import re
 import warnings
 import requests
 import plotly.express as px
@@ -34,21 +31,20 @@ warnings.filterwarnings("ignore")
 # CONFIGURATION
 # ──────────────────────────────────────────────
 
-_BASE      = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(_BASE, "loan_model.pkl")
-
-# ✅ FIXED: support both parquet and csv local files
+_BASE         = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH    = os.path.join(_BASE, "loan_model.pkl")
 _PARQUET_PATH = os.path.join(_BASE, "loan_clean_data.parquet")
 _CSV_PATH     = os.path.join(_BASE, "cleaned_loan_data.csv")
 
-# Cloud fallback — fill via st.secrets or leave blank
+# Cloud secrets — fill via st.secrets or leave blank
 DATASET_HF_REPO = ""
 DATASET_URL     = ""
+MODEL_URL       = ""
 
-# ── Pull secrets set in Streamlit Cloud ──
 try:
     DATASET_HF_REPO = st.secrets.get("DATASET_HF_REPO", DATASET_HF_REPO)
     DATASET_URL     = st.secrets.get("DATASET_URL",     DATASET_URL)
+    MODEL_URL       = st.secrets.get("MODEL_URL",       MODEL_URL)
 except Exception:
     pass
 
@@ -68,116 +64,71 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
-div[data-baseweb="tab-list"] {
-    border-radius: 10px; padding: 4px; gap: 4px;
-}
-div[data-baseweb="tab"] {
-    background: transparent; border-radius: 8px;
-    font-weight: 500; padding: 8px 20px;
-}
+div[data-baseweb="tab-list"] { border-radius: 10px; padding: 4px; gap: 4px; }
+div[data-baseweb="tab"] { background: transparent; border-radius: 8px; font-weight: 500; padding: 8px 20px; }
 div[data-baseweb="tab"][aria-selected="true"] {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white !important;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white !important;
 }
 
 .kpi-card {
     background: var(--background-color, transparent);
-    border: 1px solid rgba(102,126,234,0.35);
-    border-radius: 14px; padding: 20px 24px; text-align: center;
+    border: 1px solid rgba(102,126,234,0.35); border-radius: 14px;
+    padding: 20px 24px; text-align: center;
     transition: transform 0.2s ease, box-shadow 0.2s ease;
     box-shadow: 0 2px 8px rgba(0,0,0,0.08);
 }
-.kpi-card:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 8px 25px rgba(102,126,234,0.25);
-}
+.kpi-card:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(102,126,234,0.25); }
 .kpi-value {
     font-size: 2.2rem; font-weight: 700;
     background: linear-gradient(135deg, #667eea, #a78bfa);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent; line-height: 1.2;
 }
-.kpi-label {
-    font-size: 0.82rem; opacity: 0.65;
-    text-transform: uppercase; letter-spacing: 0.08em; margin-top: 4px;
-}
+.kpi-label { font-size: 0.82rem; opacity: 0.65; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 4px; }
 
 .section-header {
-    font-size: 1.15rem; font-weight: 600;
-    padding-bottom: 8px; border-bottom: 2px solid #667eea;
-    margin-bottom: 16px; display: inline-block;
+    font-size: 1.15rem; font-weight: 600; padding-bottom: 8px;
+    border-bottom: 2px solid #667eea; margin-bottom: 16px; display: inline-block;
 }
 
-.predict-approved {
-    background: rgba(34,197,94,0.08);
-    border: 1px solid #22c55e; border-radius: 14px; padding: 24px; text-align: center;
-}
-.predict-rejected {
-    background: rgba(239,68,68,0.08);
-    border: 1px solid #ef4444; border-radius: 14px; padding: 24px; text-align: center;
-}
+.predict-approved { background: rgba(34,197,94,0.08); border: 1px solid #22c55e; border-radius: 14px; padding: 24px; text-align: center; }
+.predict-rejected { background: rgba(239,68,68,0.08);  border: 1px solid #ef4444; border-radius: 14px; padding: 24px; text-align: center; }
 .predict-title-approved { font-size: 2rem; font-weight: 700; color: #16a34a; }
 .predict-title-rejected  { font-size: 2rem; font-weight: 700; color: #dc2626; }
 .predict-subtitle { font-size: 0.9rem; opacity: 0.6; margin-top: 6px; }
 
 .insight-box {
-    background: rgba(102,126,234,0.07);
-    border-left: 3px solid #667eea;
+    background: rgba(102,126,234,0.07); border-left: 3px solid #667eea;
     border-radius: 0 8px 8px 0; padding: 12px 16px;
     font-size: 0.88rem; margin-top: 8px; margin-bottom: 20px; opacity: 0.85;
 }
 
-.ins-card {
-    background: rgba(102,126,234,0.06);
-    border: 1px solid rgba(102,126,234,0.25);
-    border-radius: 14px; padding: 22px 26px; margin-bottom: 16px;
-}
+.ins-card { background: rgba(102,126,234,0.06); border: 1px solid rgba(102,126,234,0.25); border-radius: 14px; padding: 22px 26px; margin-bottom: 16px; }
 .ins-card-title { font-size: 1rem; font-weight: 700; color: #7c3aed; margin-bottom: 10px; }
 .ins-card-body  { font-size: 0.9rem; line-height: 1.7; opacity: 0.85; }
 
-.highlight-green {
-    background: rgba(34,197,94,0.08);
-    border: 1px solid #22c55e; border-radius: 10px;
-    padding: 16px 20px; font-size: 0.9rem; margin-bottom: 12px; color: #15803d;
-}
-.highlight-red {
-    background: rgba(239,68,68,0.08);
-    border: 1px solid #ef4444; border-radius: 10px;
-    padding: 16px 20px; font-size: 0.9rem; margin-bottom: 12px; color: #b91c1c;
-}
-.highlight-blue {
-    background: rgba(59,130,246,0.08);
-    border: 1px solid #3b82f6; border-radius: 10px;
-    padding: 16px 20px; font-size: 0.9rem; margin-bottom: 12px; color: #1d4ed8;
-}
-.highlight-amber {
-    background: rgba(245,158,11,0.08);
-    border: 1px solid #f59e0b; border-radius: 10px;
-    padding: 16px 20px; font-size: 0.9rem; margin-bottom: 12px; color: #b45309;
-}
+.highlight-green { background: rgba(34,197,94,0.08);  border: 1px solid #22c55e; border-radius: 10px; padding: 16px 20px; font-size: 0.9rem; margin-bottom: 12px; color: #15803d; }
+.highlight-red   { background: rgba(239,68,68,0.08);  border: 1px solid #ef4444; border-radius: 10px; padding: 16px 20px; font-size: 0.9rem; margin-bottom: 12px; color: #b91c1c; }
+.highlight-blue  { background: rgba(59,130,246,0.08); border: 1px solid #3b82f6; border-radius: 10px; padding: 16px 20px; font-size: 0.9rem; margin-bottom: 12px; color: #1d4ed8; }
+.highlight-amber { background: rgba(245,158,11,0.08); border: 1px solid #f59e0b; border-radius: 10px; padding: 16px 20px; font-size: 0.9rem; margin-bottom: 12px; color: #b45309; }
 
 .rec-pill {
-    display: inline-block;
-    background: linear-gradient(135deg, #667eea, #764ba2);
+    display: inline-block; background: linear-gradient(135deg, #667eea, #764ba2);
     color: white; border-radius: 20px; padding: 4px 14px;
     font-size: 0.78rem; font-weight: 600; margin: 4px 4px 4px 0;
 }
 .sidebar-badge {
-    display: inline-block;
-    background: linear-gradient(135deg, #667eea, #764ba2);
-    color: white; border-radius: 20px; padding: 2px 12px;
-    font-size: 0.75rem; font-weight: 600;
+    display: inline-block; background: linear-gradient(135deg, #667eea, #764ba2);
+    color: white; border-radius: 20px; padding: 2px 12px; font-size: 0.75rem; font-weight: 600;
 }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════
-# DATASET LOADER — Multi-strategy with fallback
+# GOOGLE DRIVE HELPERS
 # ══════════════════════════════════════════════
 
 def _extract_gdrive_id(url: str):
-    """Extract Google Drive file ID from any share/view/uc URL format."""
-    import re
     patterns = [
         r"/file/d/([a-zA-Z0-9_-]{25,})",
         r"id=([a-zA-Z0-9_-]{25,})",
@@ -190,146 +141,121 @@ def _extract_gdrive_id(url: str):
     return None
 
 
-def _load_from_gdrive(url: str) -> pd.DataFrame:
-    """
-    Download a CSV or Parquet from Google Drive, handling the large-file
-    virus-scan confirmation page automatically.
-    """
+def _gdrive_download(url: str) -> bytes:
+    """Download raw bytes from any Google Drive or direct URL, bypassing virus-scan page."""
     session = requests.Session()
-
     file_id = _extract_gdrive_id(url)
+
     if not file_id:
-        # Not a Google Drive URL — try raw download directly
         resp = session.get(url, timeout=120)
         resp.raise_for_status()
-        return _parse_response(resp, url)
+        return resp.content
 
-    # Step 1 — Hit the standard export endpoint
     download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
     resp = session.get(download_url, timeout=60)
     resp.raise_for_status()
 
-    # Step 2 — Check if Google returned an HTML virus-scan warning page
-    content_type = resp.headers.get("Content-Type", "")
-    if "text/html" in content_type:
-        import re
+    # Handle virus-scan HTML warning page
+    if "text/html" in resp.headers.get("Content-Type", ""):
         token_match = re.search(r'name="uuid"\s+value="([^"]+)"', resp.text)
         if not token_match:
             token_match = re.search(r'confirm=([0-9A-Za-z_-]+)', resp.text)
 
         if token_match:
-            token = token_match.group(1)
             confirm_url = (
                 f"https://drive.usercontent.google.com/download"
-                f"?id={file_id}&export=download&confirm={token}"
+                f"?id={file_id}&export=download&confirm={token_match.group(1)}"
             )
-            resp = session.get(confirm_url, timeout=180)
-            resp.raise_for_status()
         else:
-            usercontent_url = (
+            confirm_url = (
                 f"https://drive.usercontent.google.com/download"
                 f"?id={file_id}&export=download&authuser=0"
             )
-            resp = session.get(usercontent_url, timeout=180)
-            resp.raise_for_status()
+        resp = session.get(confirm_url, timeout=180)
+        resp.raise_for_status()
 
-    # Step 3 — Check we didn't get another HTML page
-    content_type = resp.headers.get("Content-Type", "")
-    if "text/html" in content_type:
+    if "text/html" in resp.headers.get("Content-Type", ""):
         raise ValueError(
-            "Google Drive returned an HTML page instead of a data file. "
+            "Google Drive returned an HTML page. "
             "Make sure the file is shared as 'Anyone with the link'."
         )
 
-    return _parse_response(resp, url)
+    return resp.content
 
 
-def _parse_response(resp, url: str = "") -> pd.DataFrame:
-    """
-    ✅ FIXED: Auto-detect parquet vs CSV from Content-Type header or URL,
-    then parse accordingly.
-    """
-    content_type = resp.headers.get("Content-Type", "")
-    raw = resp.content
-
-    # Detect parquet by magic bytes (PAR1) or content-type or url hint
-    is_parquet = (
-        raw[:4] == b"PAR1"
-        or "parquet" in content_type.lower()
-        or "parquet" in url.lower()
-    )
-
+def _bytes_to_dataframe(raw: bytes, url: str = "") -> pd.DataFrame:
+    """Auto-detect parquet vs CSV from magic bytes, then parse."""
+    is_parquet = raw[:4] == b"PAR1" or "parquet" in url.lower()
     if is_parquet:
         return pd.read_parquet(io.BytesIO(raw))
-    else:
-        # Try CSV
-        try:
-            return pd.read_csv(io.BytesIO(raw))
-        except Exception:
-            # Last resort — try parquet anyway
-            return pd.read_parquet(io.BytesIO(raw))
+    try:
+        return pd.read_csv(io.BytesIO(raw))
+    except Exception:
+        return pd.read_parquet(io.BytesIO(raw))
 
+
+# ══════════════════════════════════════════════
+# DATA LOADER
+# ══════════════════════════════════════════════
 
 @st.cache_data(show_spinner=False)
 def load_data():
-    """
-    Load dataset using a 3-tier strategy:
-      1. Local file (parquet preferred, then CSV)
-      2. Hugging Face Hub
-      3. Google Drive / Direct URL
-    Returns a DataFrame or None if all strategies fail.
-    """
-
-    # ── Strategy 1: Local file ──────────────────
-    # ✅ FIXED: check parquet first, then CSV
+    # Strategy 1 — Local file (parquet first, then CSV)
     for local_path in [_PARQUET_PATH, _CSV_PATH]:
         if os.path.exists(local_path):
             try:
                 if local_path.endswith(".parquet"):
                     return pd.read_parquet(local_path)
-                else:
-                    return pd.read_csv(local_path)
+                return pd.read_csv(local_path)
             except Exception as e:
-                st.warning(f"Local file '{os.path.basename(local_path)}' found but failed to read: {e}")
+                st.warning(f"Local file '{os.path.basename(local_path)}' failed: {e}")
 
-    # ── Strategy 2: Hugging Face Hub ───────────
+    # Strategy 2 — Hugging Face Hub
     if DATASET_HF_REPO.strip():
-        for filename in ["loan_clean_data.parquet", "cleaned_loan_data.csv", "loan_data.csv"]:
+        for fname in ["loan_clean_data.parquet", "cleaned_loan_data.csv", "loan_data.csv"]:
             try:
-                hf_url = (
-                    f"https://huggingface.co/datasets/{DATASET_HF_REPO.strip()}"
-                    f"/resolve/main/{filename}"
-                )
-                resp = requests.get(hf_url, timeout=60)
-                resp.raise_for_status()
-                df = _parse_response(resp, hf_url)
-                return df
+                hf_url = f"https://huggingface.co/datasets/{DATASET_HF_REPO.strip()}/resolve/main/{fname}"
+                raw = _gdrive_download(hf_url)
+                return _bytes_to_dataframe(raw, hf_url)
             except Exception:
                 continue
         st.warning("Hugging Face load failed for all known filenames.")
 
-    # ── Strategy 3: Google Drive / Direct URL ───
+    # Strategy 3 — Google Drive / Direct URL
     if DATASET_URL.strip():
         try:
-            df = _load_from_gdrive(DATASET_URL.strip())
-            return df
+            raw = _gdrive_download(DATASET_URL.strip())
+            return _bytes_to_dataframe(raw, DATASET_URL.strip())
         except Exception as e:
-            st.warning(f"URL download failed: {e}")
+            st.warning(f"Dataset URL download failed: {e}")
 
     return None
 
 
+# ══════════════════════════════════════════════
+# MODEL LOADER  ← FIXED: now also loads from Google Drive
+# ══════════════════════════════════════════════
+
 @st.cache_resource(show_spinner=False)
 def load_model():
-    """Load the serialised Random Forest model. Returns None on failure."""
-    if not os.path.exists(MODEL_PATH):
-        return None
-    try:
-        with open(MODEL_PATH, "rb") as f:
-            return pickle.load(f)
-    except Exception as e:
-        st.error(f"Failed to load model: {e}")
-        return None
+    # Strategy 1 — Local pkl
+    if os.path.exists(MODEL_PATH):
+        try:
+            with open(MODEL_PATH, "rb") as f:
+                return pickle.load(f)
+        except Exception as e:
+            st.warning(f"Local model found but failed to load: {e}")
+
+    # Strategy 2 — Google Drive / Direct URL  ← NEW
+    if MODEL_URL.strip():
+        try:
+            raw = _gdrive_download(MODEL_URL.strip())
+            model = pickle.loads(raw)
+            return model
+        except Exception as e:
+            st.error(f"Model URL download failed: {e}")
+
+    return None
 
 
 # ══════════════════════════════════════════════
@@ -373,7 +299,7 @@ def render_sidebar(df):
 
 
 # ══════════════════════════════════════════════
-# HELPER
+# HELPERS
 # ══════════════════════════════════════════════
 
 def _insight(text: str):
@@ -381,7 +307,6 @@ def _insight(text: str):
 
 
 def _approved_mask(series: pd.Series) -> pd.Series:
-    """Return boolean mask for 'approved' values regardless of encoding."""
     return series.astype(str).str.strip().str.upper().isin(["Y", "1", "YES", "APPROVED", "1.0"])
 
 
@@ -419,9 +344,9 @@ def show_dashboard(df: pd.DataFrame):
     with st.expander("📄 Dataset Preview — First 10 Rows", expanded=True):
         st.dataframe(df.head(10), use_container_width=True, height=300)
         c1, c2, c3 = st.columns(3)
-        c1.metric("Rows",       df.shape[0])
-        c2.metric("Columns",    df.shape[1])
-        c3.metric("Size (KB)",  f"{df.memory_usage(deep=True).sum()/1024:.1f}")
+        c1.metric("Rows",      df.shape[0])
+        c2.metric("Columns",   df.shape[1])
+        c3.metric("Size (KB)", f"{df.memory_usage(deep=True).sum()/1024:.1f}")
 
     with st.expander("🔍 Column Data Types"):
         dtype_df = pd.DataFrame({
@@ -447,8 +372,10 @@ def show_dashboard(df: pd.DataFrame):
     st.markdown('<p class="section-header">📊 Key Distributions</p>', unsafe_allow_html=True)
 
     chart_cats = {k: v for k, v in {
-        "Loan_Status": "Loan Status Distribution", "Gender": "Gender Distribution",
-        "Education": "Education Distribution", "Property_Area": "Property Area Distribution",
+        "Loan_Status":   "Loan Status Distribution",
+        "Gender":        "Gender Distribution",
+        "Education":     "Education Distribution",
+        "Property_Area": "Property Area Distribution",
     }.items() if k in df.columns}
 
     pairs = list(chart_cats.items())
@@ -462,7 +389,8 @@ def show_dashboard(df: pd.DataFrame):
                              color="Count", color_continuous_scale=["#667eea","#a78bfa"],
                              template="plotly_white")
                 fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                                  coloraxis_showscale=False, height=300, margin=dict(t=40,b=20,l=10,r=10))
+                                  coloraxis_showscale=False, height=300,
+                                  margin=dict(t=40,b=20,l=10,r=10))
                 st.plotly_chart(fig, use_container_width=True)
 
     st.markdown('<p class="section-header">📉 Income & Loan Amount</p>', unsafe_allow_html=True)
@@ -484,7 +412,7 @@ def show_dashboard(df: pd.DataFrame):
         fig = go.Figure(data=go.Heatmap(
             z=corr.values, x=corr.columns.tolist(), y=corr.columns.tolist(),
             colorscale="Viridis", zmin=-1, zmax=1,
-            text=np.round(corr.values,2), texttemplate="%{text}", textfont={"size":10},
+            text=np.round(corr.values, 2), texttemplate="%{text}", textfont={"size":10},
         ))
         fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", template="plotly_white",
                           height=420, margin=dict(t=20,b=20,l=20,r=20))
@@ -500,7 +428,8 @@ def show_prediction_page(df: pd.DataFrame, model):
     st.caption("Fill in the applicant details below and click **Predict** to get an instant decision.")
 
     if model is None:
-        st.error("❌ Model file `loan_model.pkl` not found. Please place it in the project directory.")
+        st.error("❌ Model could not be loaded. Please set MODEL_URL in Streamlit secrets or place loan_model.pkl in the project folder.")
+        st.info("👉 Go to your Streamlit Cloud app → Settings → Secrets and add:\n\n`MODEL_URL = \"https://drive.google.com/uc?export=download&id=YOUR_MODEL_FILE_ID\"`")
         return
 
     model_features = None
@@ -526,16 +455,19 @@ def show_prediction_page(df: pd.DataFrame, model):
         for idx, feat in enumerate(model_features):
             with feature_col[idx % 2]:
                 if feat in cat_options:
-                    input_data[feat] = st.selectbox(feat.replace("_"," "), cat_options[feat], key=f"i_{feat}")
+                    input_data[feat] = st.selectbox(
+                        feat.replace("_"," "), cat_options[feat], key=f"i_{feat}")
                 else:
                     col_min  = float(df[feat].min())  if feat in df.columns else 0.0
                     col_max  = float(df[feat].max())  if feat in df.columns else 1_000_000.0
                     col_mean = float(df[feat].mean()) if feat in df.columns else 0.0
-                    input_data[feat] = st.number_input(feat.replace("_"," "), min_value=col_min,
-                                                       max_value=col_max, value=round(col_mean,2), key=f"i_{feat}")
+                    input_data[feat] = st.number_input(
+                        feat.replace("_"," "), min_value=col_min,
+                        max_value=col_max, value=round(col_mean, 2), key=f"i_{feat}")
 
         st.markdown("<br>", unsafe_allow_html=True)
-        submitted = st.form_submit_button("🚀 Predict Loan Status", use_container_width=True, type="primary")
+        submitted = st.form_submit_button(
+            "🚀 Predict Loan Status", use_container_width=True, type="primary")
 
     if submitted:
         try:
@@ -544,7 +476,7 @@ def show_prediction_page(df: pd.DataFrame, model):
                 if col in df.columns:
                     cats = sorted(df[col].dropna().unique().tolist())
                     input_df[col] = input_df[col].map({v: i for i, v in enumerate(cats)})
-            input_df = input_df[model_features]
+            input_df   = input_df[model_features]
             prediction = model.predict(input_df)[0]
             proba      = model.predict_proba(input_df)[0]
             approved   = str(prediction).strip().upper() in ["Y","1","YES","APPROVED","1.0"]
@@ -571,10 +503,17 @@ def show_prediction_page(df: pd.DataFrame, model):
         fig_gauge = go.Figure(go.Indicator(
             mode="gauge+number", value=confidence,
             title={"text":"Approval Probability (%)","font":{"color":"#e2e8f0","size":14}},
-            gauge={"axis":{"range":[0,100],"tickcolor":"#8b949e"},"bar":{"color":gauge_color},
-                   "bgcolor":"#1a1f2e",
-                   "steps":[{"range":[0,40],"color":"#2d1b1b"},{"range":[40,70],"color":"#2d2b1b"},{"range":[70,100],"color":"#1b2d1b"}],
-                   "threshold":{"line":{"color":gauge_color,"width":4},"thickness":0.75,"value":confidence}},
+            gauge={
+                "axis":{"range":[0,100],"tickcolor":"#8b949e"},
+                "bar":{"color":gauge_color},
+                "bgcolor":"#1a1f2e",
+                "steps":[
+                    {"range":[0,40],  "color":"#2d1b1b"},
+                    {"range":[40,70], "color":"#2d2b1b"},
+                    {"range":[70,100],"color":"#1b2d1b"},
+                ],
+                "threshold":{"line":{"color":gauge_color,"width":4},"thickness":0.75,"value":confidence},
+            },
             number={"suffix":"%","font":{"color":gauge_color,"size":36}},
         ))
         fig_gauge.update_layout(paper_bgcolor="rgba(0,0,0,0)", height=260, margin=dict(t=30,b=20))
@@ -583,8 +522,9 @@ def show_prediction_page(df: pd.DataFrame, model):
             st.plotly_chart(fig_gauge, use_container_width=True)
 
         with st.expander("📋 Input Summary"):
-            st.dataframe(pd.DataFrame(list(input_data.items()), columns=["Field","Value"]),
-                         use_container_width=True, hide_index=True)
+            st.dataframe(
+                pd.DataFrame(list(input_data.items()), columns=["Field","Value"]),
+                use_container_width=True, hide_index=True)
 
 
 # ══════════════════════════════════════════════
@@ -601,21 +541,22 @@ def show_visualization_page(df: pd.DataFrame):
 
     # ── 1. Univariate ──────────────────────────
     st.markdown('<p class="section-header">1️⃣ Univariate Analysis</p>', unsafe_allow_html=True)
-    plot_cats = [c for c in cat_cols if c not in {target_col,"Loan_ID"}]
+    plot_cats = [c for c in cat_cols if c not in {target_col, "Loan_ID"}]
     if plot_cats:
         for i in range(0, len(plot_cats), 3):
             row = st.columns(3)
             for j, col_name in enumerate(plot_cats[i:i+3]):
                 with row[j]:
                     vc = df[col_name].value_counts().reset_index()
-                    vc.columns = [col_name,"Count"]
-                    fig = px.pie(vc, names=col_name, values="Count", title=f"{col_name} Distribution",
+                    vc.columns = [col_name, "Count"]
+                    fig = px.pie(vc, names=col_name, values="Count",
+                                 title=f"{col_name} Distribution",
                                  color_discrete_sequence=px.colors.sequential.Purpor,
                                  template="plotly_white", hole=0.4)
                     fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", height=300,
                                       margin=dict(t=40,b=10), legend=dict(font=dict(size=10)))
                     st.plotly_chart(fig, use_container_width=True)
-        _insight(f"Pie charts for {', '.join(plot_cats[:3])} reveal the dominant applicant profile in the portfolio.")
+        _insight(f"Pie charts for {', '.join(plot_cats[:3])} reveal the dominant applicant profile.")
 
     st.markdown("**Numerical Feature Distributions**")
     for col_name in num_cols:
@@ -624,7 +565,8 @@ def show_visualization_page(df: pd.DataFrame):
                     else "left-skewed (negative)" if skew_val < -0.5
                     else "approximately symmetric")
         fig = px.histogram(df, x=col_name, nbins=50, title=f"{col_name} — Distribution",
-                           color_discrete_sequence=["#764ba2"], marginal="box", template="plotly_white")
+                           color_discrete_sequence=["#764ba2"], marginal="box",
+                           template="plotly_white")
         fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                           height=320, margin=dict(t=40,b=10))
         st.plotly_chart(fig, use_container_width=True)
@@ -636,17 +578,23 @@ def show_visualization_page(df: pd.DataFrame):
     st.markdown('<p class="section-header">2️⃣ Bivariate Analysis — Loan Status vs Key Features</p>', unsafe_allow_html=True)
     if target_col:
         for col_name in [c for c in ["Gender","Education","Property_Area","Credit_History","Married","Self_Employed"] if c in df.columns]:
-            ct = pd.crosstab(df[col_name], df[target_col])
-            ct_pct = ct.div(ct.sum(axis=1), axis=0).mul(100).reset_index().melt(id_vars=col_name, var_name=target_col, value_name="Percentage")
-            fig = px.bar(ct_pct, x=col_name, y="Percentage", color=target_col, barmode="group",
-                         title=f"Loan Status by {col_name}", color_discrete_sequence=["#ef4444","#22c55e"],
-                         template="plotly_white", text=ct_pct["Percentage"].apply(lambda v: f"{v:.1f}%"))
+            ct     = pd.crosstab(df[col_name], df[target_col])
+            ct_pct = (ct.div(ct.sum(axis=1), axis=0)
+                        .mul(100).reset_index()
+                        .melt(id_vars=col_name, var_name=target_col, value_name="Percentage"))
+            fig = px.bar(ct_pct, x=col_name, y="Percentage", color=target_col,
+                         barmode="group", title=f"Loan Status by {col_name}",
+                         color_discrete_sequence=["#ef4444","#22c55e"],
+                         template="plotly_white",
+                         text=ct_pct["Percentage"].apply(lambda v: f"{v:.1f}%"))
             fig.update_traces(textposition="outside")
             fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                               height=350, margin=dict(t=40,b=10))
             st.plotly_chart(fig, use_container_width=True)
             try:
-                best = ct_pct[_approved_mask(ct_pct[target_col])].sort_values("Percentage",ascending=False).iloc[0][col_name]
+                best = (ct_pct[_approved_mask(ct_pct[target_col])]
+                        .sort_values("Percentage", ascending=False)
+                        .iloc[0][col_name])
                 _insight(f"Among {col_name} groups, '{best}' applicants show the highest approval rate.")
             except Exception:
                 _insight(f"Approval rate varies across {col_name} groups.")
@@ -660,12 +608,14 @@ def show_visualization_page(df: pd.DataFrame):
     income_cols = [c for c in ["ApplicantIncome","CoapplicantIncome","LoanAmount"] if c in df.columns]
     if income_cols and target_col:
         for col_name in income_cols:
-            fig = px.box(df, x=target_col, y=col_name, color=target_col, title=f"{col_name} by Loan Status",
-                         color_discrete_sequence=["#ef4444","#22c55e"], template="plotly_white", points="outliers")
+            fig = px.box(df, x=target_col, y=col_name, color=target_col,
+                         title=f"{col_name} by Loan Status",
+                         color_discrete_sequence=["#ef4444","#22c55e"],
+                         template="plotly_white", points="outliers")
             fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                               height=340, margin=dict(t=40,b=10), showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
-            _insight(f"Approved applicants tend to show a different {col_name} profile. Outliers may affect model performance.")
+            _insight(f"Approved applicants show a different {col_name} profile. Outliers may affect model performance.")
 
     st.divider()
 
@@ -677,7 +627,7 @@ def show_visualization_page(df: pd.DataFrame):
         fig = go.Figure(data=go.Heatmap(
             z=corr.values, x=corr.columns.tolist(), y=corr.columns.tolist(),
             colorscale="Purp", zmin=-1, zmax=1,
-            text=np.round(corr.values,2), texttemplate="%{text}",
+            text=np.round(corr.values, 2), texttemplate="%{text}",
             hovertemplate="%{x} × %{y}: %{z:.2f}<extra></extra>",
         ))
         fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", template="plotly_white",
@@ -687,7 +637,7 @@ def show_visualization_page(df: pd.DataFrame):
         corr_pairs = corr_pairs[corr_pairs < 1].drop_duplicates()
         if not corr_pairs.empty:
             tp, tv = corr_pairs.index[0], corr_pairs.iloc[0]
-            _insight(f"Strongest correlation ({tv:.2f}) between '{tp[0]}' and '{tp[1]}'. High values may indicate multicollinearity.")
+            _insight(f"Strongest correlation ({tv:.2f}) between '{tp[0]}' and '{tp[1]}'.")
 
     st.divider()
 
@@ -701,7 +651,7 @@ def show_visualization_page(df: pd.DataFrame):
         fig.update_traces(marker=dict(size=3), diagonal_visible=False)
         fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", height=500, margin=dict(t=40,b=20))
         st.plotly_chart(fig, use_container_width=True)
-        _insight("The scatter matrix reveals pairwise relationships, helping identify clusters between approved and rejected applications.")
+        _insight("The scatter matrix reveals pairwise relationships across all numerical features.")
 
 
 # ══════════════════════════════════════════════
@@ -722,41 +672,19 @@ def _compute_insights(df: pd.DataFrame) -> dict:
     out["target_col"] = target_col
 
     if target_col:
-        approved_mask = _approved_mask(df[target_col])
+        approved_mask        = _approved_mask(df[target_col])
         out["approval_rate"] = approved_mask.mean() * 100
         out["total"]         = len(df)
         out["approved"]      = approved_mask.sum()
         out["rejected"]      = (~approved_mask).sum()
 
-        if "Credit_History" in df.columns:
-            ch = df.groupby("Credit_History")[target_col].apply(
-                lambda s: _approved_mask(s).mean() * 100).reset_index()
-            ch.columns = ["Credit_History","ApprovalRate"]
-            out["credit_hist"] = ch
-
-        if "Gender" in df.columns:
-            gd = df.groupby("Gender")[target_col].apply(
-                lambda s: _approved_mask(s).mean() * 100).reset_index()
-            gd.columns = ["Gender","ApprovalRate"]
-            out["gender"] = gd
-
-        if "Education" in df.columns:
-            ed = df.groupby("Education")[target_col].apply(
-                lambda s: _approved_mask(s).mean() * 100).reset_index()
-            ed.columns = ["Education","ApprovalRate"]
-            out["education"] = ed
-
-        if "Property_Area" in df.columns:
-            pa = df.groupby("Property_Area")[target_col].apply(
-                lambda s: _approved_mask(s).mean() * 100).reset_index()
-            pa.columns = ["Property_Area","ApprovalRate"]
-            out["property"] = pa
-
-        if "Married" in df.columns:
-            mr = df.groupby("Married")[target_col].apply(
-                lambda s: _approved_mask(s).mean() * 100).reset_index()
-            mr.columns = ["Married","ApprovalRate"]
-            out["married"] = mr
+        for grp_col, key in [("Credit_History","credit_hist"),("Gender","gender"),
+                              ("Education","education"),("Property_Area","property"),("Married","married")]:
+            if grp_col in df.columns:
+                g = df.groupby(grp_col)[target_col].apply(
+                    lambda s: _approved_mask(s).mean() * 100).reset_index()
+                g.columns = [grp_col, "ApprovalRate"]
+                out[key] = g
 
         for col in ["ApplicantIncome","LoanAmount"]:
             if col in df.columns:
@@ -770,16 +698,17 @@ def show_insights_page(df: pd.DataFrame):
     st.markdown("## 💡 Business Insights & Conclusions")
     st.caption("Key findings from data analysis, EDA, and model results — designed for stakeholders.")
 
-    ins = _compute_insights(df)
+    ins        = _compute_insights(df)
     has_target = ins.get("target_col") is not None
 
+    # ── Overview ────────────────────────────────
     st.markdown('<p class="section-header">📌 Overview — Loan Approval Summary</p>', unsafe_allow_html=True)
 
     if has_target:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total Applications", f"{ins['total']:,}")
-        c2.metric("Approved",           f"{ins['approved']:,}",  delta="✅")
-        c3.metric("Rejected",           f"{ins['rejected']:,}",  delta="❌", delta_color="inverse")
+        c2.metric("Approved",           f"{ins['approved']:,}", delta="✅")
+        c3.metric("Rejected",           f"{ins['rejected']:,}", delta="❌", delta_color="inverse")
         c4.metric("Approval Rate",      f"{ins['approval_rate']:.1f}%")
 
         fig_donut = go.Figure(data=[go.Pie(
@@ -791,9 +720,8 @@ def show_insights_page(df: pd.DataFrame):
         )])
         fig_donut.update_layout(
             paper_bgcolor="rgba(0,0,0,0)", template="plotly_white",
-            height=280, margin=dict(t=20,b=20,l=20,r=20),
-            showlegend=False,
-            annotations=[{"text":f"{ins['approval_rate']:.0f}%<br><span style='font-size:10px'>Approval</span>",
+            height=280, margin=dict(t=20,b=20,l=20,r=20), showlegend=False,
+            annotations=[{"text": f"{ins['approval_rate']:.0f}%<br><span style='font-size:10px'>Approval</span>",
                           "x":0.5,"y":0.5,"showarrow":False,"font":{"size":20,"color":"#e2e8f0"}}]
         )
         _, dc, _ = st.columns([1,2,1])
@@ -804,56 +732,49 @@ def show_insights_page(df: pd.DataFrame):
 
     st.divider()
 
+    # ── Key Findings ────────────────────────────
     st.markdown('<p class="section-header">🔑 Key Findings from Data Analysis</p>', unsafe_allow_html=True)
 
     with st.expander("📊 Finding 1 — Credit History is the Most Decisive Factor", expanded=True):
         if has_target and "credit_hist" in ins:
-            ch = ins["credit_hist"]
+            ch   = ins["credit_hist"]
             good = ch[ch["Credit_History"].astype(str) == "1.0"]["ApprovalRate"].values
             bad  = ch[ch["Credit_History"].astype(str) == "0.0"]["ApprovalRate"].values
             if len(good) and len(bad):
                 st.markdown(f"""
-<div class="highlight-green">
-✅ <b>Applicants with good credit history (1.0)</b> are approved at <b>{good[0]:.1f}%</b> — nearly {good[0]/max(bad[0],1):.1f}x more likely than those without.
-</div>
-<div class="highlight-red">
-❌ <b>Applicants with poor/no credit history (0.0)</b> face only <b>{bad[0]:.1f}%</b> approval — an extremely high rejection rate.
-</div>""", unsafe_allow_html=True)
-            fig = px.bar(ch, x="Credit_History", y="ApprovalRate", title="Approval Rate by Credit History",
+<div class="highlight-green">✅ <b>Good credit history (1.0)</b> — approval rate: <b>{good[0]:.1f}%</b></div>
+<div class="highlight-red">❌ <b>Poor/no credit history (0.0)</b> — approval rate: <b>{bad[0]:.1f}%</b></div>""",
+                    unsafe_allow_html=True)
+            fig = px.bar(ch, x="Credit_History", y="ApprovalRate",
+                         title="Approval Rate by Credit History",
                          color="ApprovalRate", color_continuous_scale=["#ef4444","#22c55e"],
-                         template="plotly_white", text=ch["ApprovalRate"].apply(lambda v: f"{v:.1f}%"))
+                         template="plotly_white",
+                         text=ch["ApprovalRate"].apply(lambda v: f"{v:.1f}%"))
             fig.update_traces(textposition="outside")
             fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                               coloraxis_showscale=False, height=300, margin=dict(t=30,b=10))
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.markdown('<div class="highlight-blue">ℹ️ Credit history column not found in dataset.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="highlight-blue">ℹ️ Credit history column not found.</div>', unsafe_allow_html=True)
 
     with st.expander("💰 Finding 2 — Income vs Loan Approval"):
         if has_target and "ApplicantIncome_approved" in ins:
-            ai_app = ins.get("ApplicantIncome_approved",0)
-            ai_rej = ins.get("ApplicantIncome_rejected",0)
-            la_app = ins.get("LoanAmount_approved",0)
-            la_rej = ins.get("LoanAmount_rejected",0)
             st.markdown(f"""
-<div class="highlight-green">
-💰 <b>Median Applicant Income — Approved:</b> ₹{ai_app:,.0f} &nbsp;|&nbsp; <b>Loan Amount:</b> ₹{la_app:,.0f}
-</div>
-<div class="highlight-red">
-📉 <b>Median Applicant Income — Rejected:</b> ₹{ai_rej:,.0f} &nbsp;|&nbsp; <b>Loan Amount:</b> ₹{la_rej:,.0f}
-</div>
-<div class="highlight-amber">
-⚠️ Income alone is not the strongest predictor. High-income applicants with poor credit history are still frequently rejected.
-</div>""", unsafe_allow_html=True)
+<div class="highlight-green">💰 <b>Median Income (Approved):</b> ₹{ins.get("ApplicantIncome_approved",0):,.0f} | <b>Loan Amount:</b> ₹{ins.get("LoanAmount_approved",0):,.0f}</div>
+<div class="highlight-red">📉 <b>Median Income (Rejected):</b> ₹{ins.get("ApplicantIncome_rejected",0):,.0f} | <b>Loan Amount:</b> ₹{ins.get("LoanAmount_rejected",0):,.0f}</div>
+<div class="highlight-amber">⚠️ High income alone does not guarantee approval — credit history is still the dominant factor.</div>""",
+                unsafe_allow_html=True)
         else:
             st.info("Income columns not found in dataset.")
 
     with st.expander("🎓 Finding 3 — Education vs Loan Status"):
         if has_target and "education" in ins:
             ed = ins["education"]
-            fig = px.bar(ed, x="Education", y="ApprovalRate", title="Approval Rate by Education",
+            fig = px.bar(ed, x="Education", y="ApprovalRate",
+                         title="Approval Rate by Education",
                          color="ApprovalRate", color_continuous_scale=["#667eea","#a78bfa"],
-                         template="plotly_white", text=ed["ApprovalRate"].apply(lambda v: f"{v:.1f}%"))
+                         template="plotly_white",
+                         text=ed["ApprovalRate"].apply(lambda v: f"{v:.1f}%"))
             fig.update_traces(textposition="outside")
             fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                               coloraxis_showscale=False, height=300, margin=dict(t=30,b=10))
@@ -869,9 +790,11 @@ def show_insights_page(df: pd.DataFrame):
     with st.expander("🏘️ Finding 4 — Property Area vs Loan Status"):
         if has_target and "property" in ins:
             pa = ins["property"]
-            fig = px.bar(pa, x="Property_Area", y="ApprovalRate", title="Approval Rate by Property Area",
+            fig = px.bar(pa, x="Property_Area", y="ApprovalRate",
+                         title="Approval Rate by Property Area",
                          color="ApprovalRate", color_continuous_scale=["#0ea5e9","#6366f1"],
-                         template="plotly_white", text=pa["ApprovalRate"].apply(lambda v: f"{v:.1f}%"))
+                         template="plotly_white",
+                         text=pa["ApprovalRate"].apply(lambda v: f"{v:.1f}%"))
             fig.update_traces(textposition="outside")
             fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                               coloraxis_showscale=False, height=300, margin=dict(t=30,b=10))
@@ -884,14 +807,16 @@ def show_insights_page(df: pd.DataFrame):
         else:
             st.info("Property_Area column not found.")
 
-    with st.expander("👫 Finding 5 — Gender & Marital Status Observations"):
+    with st.expander("👫 Finding 5 — Gender & Marital Status"):
         col_g, col_m = st.columns(2)
         with col_g:
             if has_target and "gender" in ins:
                 gd = ins["gender"]
-                fig = px.bar(gd, x="Gender", y="ApprovalRate", title="Approval Rate by Gender",
+                fig = px.bar(gd, x="Gender", y="ApprovalRate",
+                             title="Approval Rate by Gender",
                              color="ApprovalRate", color_continuous_scale=["#f472b6","#a78bfa"],
-                             template="plotly_white", text=gd["ApprovalRate"].apply(lambda v: f"{v:.1f}%"))
+                             template="plotly_white",
+                             text=gd["ApprovalRate"].apply(lambda v: f"{v:.1f}%"))
                 fig.update_traces(textposition="outside")
                 fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                                   coloraxis_showscale=False, height=300, margin=dict(t=30,b=10))
@@ -901,88 +826,81 @@ def show_insights_page(df: pd.DataFrame):
         with col_m:
             if has_target and "married" in ins:
                 mr = ins["married"]
-                fig = px.bar(mr, x="Married", y="ApprovalRate", title="Approval Rate by Marital Status",
+                fig = px.bar(mr, x="Married", y="ApprovalRate",
+                             title="Approval Rate by Marital Status",
                              color="ApprovalRate", color_continuous_scale=["#f59e0b","#22c55e"],
-                             template="plotly_white", text=mr["ApprovalRate"].apply(lambda v: f"{v:.1f}%"))
+                             template="plotly_white",
+                             text=mr["ApprovalRate"].apply(lambda v: f"{v:.1f}%"))
                 fig.update_traces(textposition="outside")
                 fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                                   coloraxis_showscale=False, height=300, margin=dict(t=30,b=10))
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("Married column not found.")
-        st.markdown("""
-<div class="highlight-amber">
-⚠️ While gender and marital status show statistical differences in approval rates, they should <b>not</b> be used as primary decision criteria.
-</div>""", unsafe_allow_html=True)
+        st.markdown('<div class="highlight-amber">⚠️ Gender and marital status should <b>not</b> be primary decision criteria. Credit history and income are far stronger predictors.</div>', unsafe_allow_html=True)
 
     st.divider()
 
+    # ── Top Factors ─────────────────────────────
     st.markdown('<p class="section-header">🏆 Top Factors Influencing Loan Approval</p>', unsafe_allow_html=True)
-
-    factors = [
-        ("🥇", "Credit History",     "The single most powerful predictor. A clean credit history (1.0) dramatically increases approval probability."),
-        ("🥈", "Applicant Income",   "Higher income signals repayment capacity. The loan-to-income ratio matters more than absolute income."),
-        ("🥉", "Loan Amount",        "Loan amount relative to income (affordability ratio) is key. Excessively large loan requests lead to rejections."),
-        ("4️⃣", "Property Area",     "Semiurban and urban properties typically see higher approval rates due to better infrastructure and values."),
-        ("5️⃣", "Education Level",   "Graduate applicants show higher approval rates, correlated with stable employment and income potential."),
-        ("6️⃣", "Marital Status",    "Married applicants tend to have slightly higher approval rates, possibly due to dual income households."),
-    ]
-    for rank, factor, desc in factors:
+    for rank, factor, desc in [
+        ("🥇","Credit History",  "The single most powerful predictor. A clean credit history dramatically increases approval probability."),
+        ("🥈","Applicant Income","Higher income signals repayment capacity. Loan-to-income ratio matters more than absolute income."),
+        ("🥉","Loan Amount",     "Affordability ratio is key — excessively large loan requests relative to income lead to rejections."),
+        ("4️⃣","Property Area",  "Semiurban and urban properties see higher approval rates due to better infrastructure and values."),
+        ("5️⃣","Education Level","Graduate applicants show higher approval rates, correlated with stable employment."),
+        ("6️⃣","Marital Status", "Married applicants tend to have slightly higher approval rates, possibly due to dual income households."),
+    ]:
         _ins_card(rank, factor, desc)
 
     st.divider()
 
+    # ── Model Performance ────────────────────────
     st.markdown('<p class="section-header">🤖 Model Performance Summary</p>', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Algorithm",  "Random Forest")
-    c2.metric("Accuracy",   "~80–85%")
-    c3.metric("Precision",  "~82%")
-    c4.metric("Recall",     "~88%")
+    c1.metric("Algorithm", "Random Forest")
+    c2.metric("Accuracy",  "~80–85%")
+    c3.metric("Precision", "~82%")
+    c4.metric("Recall",    "~88%")
 
     with st.expander("📋 Why Random Forest was Selected"):
         st.markdown("""
 <div class="ins-card"><div class="ins-card-body">
-• <b>Best overall accuracy</b> among all evaluated models.<br>
+• <b>Best overall accuracy</b> among all evaluated models (LR, DT, KNN, SVM, RF).<br>
 • <b>Handles missing values</b> and mixed data types gracefully.<br>
 • <b>Robust to overfitting</b> due to ensemble averaging across 100+ trees.<br>
-• <b>Feature importance</b> extractable for stakeholder explainability.<br>
+• <b>Feature importance</b> extractable directly for stakeholder explainability.<br>
 • <b>No feature scaling needed</b> — unlike SVM or KNN.<br>
 • <b>Handles class imbalance</b> reasonably well.
 </div></div>""", unsafe_allow_html=True)
 
     st.divider()
 
+    # ── Recommendations ──────────────────────────
     st.markdown('<p class="section-header">💼 Business Recommendations</p>', unsafe_allow_html=True)
-    recs = [
-        ("🔐", "Prioritise Credit History Verification",
-         "Credit history is the single strongest signal. Invest in robust credit bureau integrations."),
-        ("📊", "Introduce Loan-to-Income Ratio Thresholds",
-         "Set clear policy thresholds. Loans above 40–50% of annual income should face enhanced scrutiny."),
-        ("🏘️", "Design Area-Specific Loan Products",
-         "Semiurban and rural applicants have different risk profiles. Tailored products improve inclusion."),
-        ("🎓", "Support First-Time Graduate Borrowers",
-         "Consider secured loan products for graduates without a credit history."),
-        ("🤖", "Deploy Model with Human Review Fallback",
-         "Retain human review for borderline cases (predicted probability 40–70%)."),
-        ("📈", "Regularly Retrain the Model",
-         "Schedule model retraining every 6 months with fresh data to prevent concept drift."),
-    ]
-    for icon, title, body in recs:
+    for icon, title, body in [
+        ("🔐","Prioritise Credit History Verification",    "Credit history is the single strongest signal. Invest in robust credit bureau integrations before any other evaluation step."),
+        ("📊","Introduce Loan-to-Income Ratio Thresholds", "Applicants requesting loans above 40–50% of annual income should undergo enhanced scrutiny."),
+        ("🏘️","Design Area-Specific Loan Products",        "Semiurban and rural applicants have different risk profiles. Tailored products improve inclusion without increasing default risk."),
+        ("🎓","Support First-Time Graduate Borrowers",     "Consider secured loan products for graduates without a credit history to bring them into formal credit."),
+        ("🤖","Deploy Model with Human Review Fallback",   "Retain human review for borderline cases (probability 40–70%) to balance efficiency with fairness."),
+        ("📈","Regularly Retrain the Model",               "Schedule retraining every 6 months with fresh data to maintain accuracy and prevent concept drift."),
+    ]:
         with st.expander(f"{icon} {title}"):
             st.markdown(f'<div class="highlight-blue">{body}</div>', unsafe_allow_html=True)
 
     st.divider()
 
+    # ── Conclusion ───────────────────────────────
     st.markdown('<p class="section-header">🎯 Final Project Conclusion</p>', unsafe_allow_html=True)
     st.markdown("""
 <div class="ins-card">
 <div class="ins-card-title">🏆 Project Summary — Loan Approval Prediction System</div>
 <div class="ins-card-body">
-This project successfully developed an end-to-end <b>Loan Approval Prediction System</b> using real banking data.<br><br>
-<b>📋 Data & EDA:</b> Cleaned dataset, handled missing values, outliers, and categorical encoding. Performed comprehensive EDA.<br><br>
-<b>🤖 Modelling:</b> Trained and evaluated Logistic Regression, Decision Tree, KNN, SVM, and Random Forest. RF achieved ~80–85% accuracy.<br><br>
-<b>📊 Business Value:</b> Automates loan eligibility screening. Credit history is the most decisive factor.<br><br>
-<b>🚀 Deployment:</b> Production-ready Streamlit app with 4 interactive tabs, deployed on Streamlit Cloud with multi-strategy dataset loading.
+<b>📋 Data & EDA:</b> Cleaned and preprocessed the raw loan dataset. Performed comprehensive EDA revealing key patterns in credit history, income, education, and property area.<br><br>
+<b>🤖 Modelling:</b> Trained and evaluated Logistic Regression, Decision Tree, KNN, SVM, and Random Forest. RF achieved the highest accuracy (~80–85%) and was selected as the production model.<br><br>
+<b>📊 Business Value:</b> Automates loan eligibility screening. Credit history is the most decisive factor — aligned with real-world banking practices.<br><br>
+<b>🚀 Deployment:</b> Production-ready Streamlit app with 4 interactive tabs deployed on Streamlit Cloud. Robust multi-strategy loader handles both dataset and model via Google Drive secrets.
 </div>
 </div>""", unsafe_allow_html=True)
 
@@ -997,7 +915,7 @@ This project successfully developed an end-to-end <b>Loan Approval Prediction Sy
 
 
 # ══════════════════════════════════════════════
-# MAIN ENTRY POINT
+# MAIN
 # ══════════════════════════════════════════════
 
 def main():
@@ -1010,22 +928,22 @@ def main():
         st.markdown("""
 **To fix this, choose one of these options:**
 
-**Option A — Local file (for development):**
-Place `loan_clean_data.parquet` or `cleaned_loan_data.csv` in the same folder as `appppppp.py`.
+**Option A — Local file:** Place `loan_clean_data.parquet` or `cleaned_loan_data.csv` in the same folder as `appppppp.py`.
 
-**Option B — Google Drive (recommended for cloud):**
-1. Upload your file to Google Drive and set sharing to *Anyone with the link*
+**Option B — Google Drive (recommended for Streamlit Cloud):**
+1. Upload your file to Google Drive → Share as *Anyone with the link*
 2. Go to Streamlit Cloud → App Settings → Secrets
-3. Add: `DATASET_URL = "https://drive.google.com/uc?export=download&id=YOUR_FILE_ID"`
-
-**Option C — Hugging Face:**
-1. Upload your file to [huggingface.co/new-dataset](https://huggingface.co/new-dataset)
-2. Add: `DATASET_HF_REPO = "your-username/your-repo-name"`
+3. Add:
+```
+DATASET_URL = "https://drive.google.com/uc?export=download&id=YOUR_FILE_ID"
+MODEL_URL   = "https://drive.google.com/uc?export=download&id=YOUR_MODEL_FILE_ID"
+```
 """)
         st.stop()
 
     if model is None:
-        st.warning("⚠️ `loan_model.pkl` not found — Prediction tab disabled. Other tabs work normally.")
+        st.warning("⚠️ `loan_model.pkl` not found — Prediction tab disabled.")
+        st.info("👉 Add `MODEL_URL` to your Streamlit secrets (Settings → Secrets) pointing to your `loan_model.pkl` on Google Drive.")
 
     render_sidebar(df)
 
@@ -1039,16 +957,12 @@ Powered by Random Forest · Built on your actual cleaned dataset · Streamlit Cl
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🔍 Loan Prediction", "📈 Visualization", "💡 Insights"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard","🔍 Loan Prediction","📈 Visualization","💡 Insights"])
 
-    with tab1:
-        show_dashboard(df)
-    with tab2:
-        show_prediction_page(df, model)
-    with tab3:
-        show_visualization_page(df)
-    with tab4:
-        show_insights_page(df)
+    with tab1: show_dashboard(df)
+    with tab2: show_prediction_page(df, model)
+    with tab3: show_visualization_page(df)
+    with tab4: show_insights_page(df)
 
 
 if __name__ == "__main__":
